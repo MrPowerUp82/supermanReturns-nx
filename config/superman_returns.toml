@@ -1,0 +1,8 @@
+# Experimental boot configuration. Shader translation is handled by Xenos;
+# the NFSMW shader library and native renderer are not used by this build.
+gpu_plugin = "xenos"
+mnk_mode = false
+input_xbox_layout = false
+sr_skip_intro = false
+# Disable the fork's NFSMW-specific IO tuning until tested with AST streaming.
+nfsmw_io_rangos_mb = 0

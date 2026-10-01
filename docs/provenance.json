@@ -1,0 +1,31 @@
+{
+  "nfsmw_nx": {
+    "url": "https://github.com/StevensND/nfsmw-nx",
+    "commit": "66611e3dc6e53f40807561f1e855f1eda241ef4a",
+    "reused": ["sdk", "mesa", "tools/switch/cmake/switch-devkitA64.cmake", "tools/fetch_thirdparty.py"],
+    "local_changes": ["SDK dependency export markers", "fetcher writes completion markers"]
+  },
+  "superman_returns_recomp": {
+    "local_path": "../superman_returns_recomp",
+    "commit": "b5b04ddb6f53f496975231cac82018f9c90028fa",
+    "reused": ["port/superman_returns_manifest.toml", "port/src/xma_fixes.cpp", "port/src/skip_intro.cpp"],
+    "manifest_changes": ["game_root points to local staged XEX", "unvalidated render-scale hook removed"]
+  },
+  "mesa_switch": {
+    "url": "https://github.com/danfromtico/mesa-switch",
+    "commit": "1a8c1a66d6fd8d65f10107c4627ffc3606ba5631",
+    "patch": "mesa/mesa-switch-nfsmw.patch",
+    "build_recipe": "tools/switch/Dockerfile.mesa adapted from upstream Docker.rust"
+  },
+  "devkitpro_image": {
+    "repository": "devkitpro/devkita64",
+    "digest": "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
+  },
+  "guest": {
+    "title_id": "454107ED",
+    "media_id": "64A4002A",
+    "xex_version": "0.0.0.1",
+    "sha256": "c8f243acd99de9a91f5ae4f409721c0e954e3d5eb96861419d3da07b8106db2b",
+    "distributed": false
+  }
+}
