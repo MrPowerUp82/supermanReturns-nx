@@ -32,8 +32,8 @@ if(NOT TARGET rex::nvk)
         "${DEVKITPRO}/portlibs/switch/lib"
         "${DEVKITPRO}/libnx/lib")
     target_link_libraries(rexglue_switch_nvk INTERFACE
-        vulkan expat zstd z nx
-        vulkan expat zstd z nx
+        "-Wl,--whole-archive" vulkan "-Wl,--no-whole-archive" expat zstd z nx
+        "-Wl,--whole-archive" vulkan "-Wl,--no-whole-archive" expat zstd z nx
         stdc++ m)
     target_link_options(rexglue_switch_nvk INTERFACE -pthread)
 endif()

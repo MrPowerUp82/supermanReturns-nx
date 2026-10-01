@@ -4,7 +4,11 @@ export DEVKITPRO=/opt/devkitpro
 export PATH="$DEVKITPRO/devkitA64/bin:$DEVKITPRO/tools/bin:$PATH"
 SOURCE=/work/superman-source
 mkdir -p "$SOURCE"
-tar -xf /project/.tools/project-build-source.tar -C "$SOURCE"
+if [ -f /project/.tools/project-build-source.tar ] && tar -tf /project/.tools/project-build-source.tar >/dev/null 2>&1; then
+    tar -xf /project/.tools/project-build-source.tar -C "$SOURCE"
+else
+    tar -cf - --exclude=app/out --exclude=sdk/out -C /project app sdk tools/switch/cmake | tar -xf - -C "$SOURCE"
+fi
 cd "$SOURCE"
 cmake -S app -B /work/game-switch -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="$SOURCE/tools/switch/cmake/switch-devkitA64.cmake" \

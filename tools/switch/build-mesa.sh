@@ -7,8 +7,9 @@ export MESA_SWITCH_RUST_TARGET=aarch64-unknown-linux-gnu
 JOBS=${JOBS:-4}
 MESA=/work/mesa
 mkdir -p "$MESA"
-tar -xf /project/.tools/mesa-build-source.tar -C "$MESA"
-python3 - "$MESA" <<'PY'
+if [ ! -d "$MESA/.git" ]; then
+    tar -xf /project/.tools/mesa-build-source.tar -C "$MESA"
+    python3 - "$MESA" <<'PY'
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +25,7 @@ for entry in subprocess.check_output(['git', '-C', str(root), 'ls-files', '-s'],
         path = root / name
         path.chmod(path.stat().st_mode | 0o111)
 PY
+fi
 test "$(git -C "$MESA" rev-parse HEAD)" = 1a8c1a66d6fd8d65f10107c4627ffc3606ba5631
 rustup target add "$MESA_SWITCH_RUST_TARGET"
 mkdir -p /usr/local/libexec

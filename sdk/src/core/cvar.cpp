@@ -580,6 +580,11 @@ void UnregisterChangeCallbacks(std::string_view name) {
 //=============================================================================
 
 std::vector<std::string> Init(int argc, char** argv) {
+  if (argc <= 0 || argv == nullptr) {
+    g_init_done = true;
+    return {};
+  }
+
   CLI::App app{"", ""};
   app.allow_extras();
 
@@ -601,7 +606,7 @@ std::vector<std::string> Init(int argc, char** argv) {
 
   try {
     app.parse(argc, argv);
-  } catch (const CLI::ParseError& e) {
+  } catch (const std::exception& e) {
     // TODO(tomc): dumb workaround for the stupid chicken and its egg.
     //             dont call rex logging funcs here for now.
     fprintf(stderr, "cvar: CLI11  parse error: %s\n", e.what());

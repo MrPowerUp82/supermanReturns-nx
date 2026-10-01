@@ -1,5 +1,5 @@
 diff --git a/bindgen-switch-wrapper.sh b/bindgen-switch-wrapper.sh
-index 36cadd7..288622f 100755
+index 36cadd7..1c6879c 100755
 --- a/bindgen-switch-wrapper.sh
 +++ b/bindgen-switch-wrapper.sh
 @@ -36,6 +36,12 @@ else
@@ -41,7 +41,7 @@ index a31e5d2..d89f497 100755
          -Dprecomp-compiler=enabled \
          -Dinstall-mesa-clc=true
 diff --git a/meson.build b/meson.build
-index 60ad845..948831b 100644
+index 60ad845..575f732 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -1990,7 +1990,8 @@ if with_clc
@@ -55,7 +55,7 @@ index 60ad845..948831b 100644
  if draw_with_llvm
    llvm_modules += 'native'
 diff --git a/rustc-native-msys2-wrapper.sh b/rustc-native-msys2-wrapper.sh
-index b77dfeb..a11fc5a 100755
+index b77dfeb..01ebe1f 100644
 --- a/rustc-native-msys2-wrapper.sh
 +++ b/rustc-native-msys2-wrapper.sh
 @@ -44,4 +44,12 @@ for arg in "$@"; do
@@ -73,10 +73,20 @@ index b77dfeb..a11fc5a 100755
 +[ -n "$NATIVE_LINKER" ] || NATIVE_LINKER="$(command -v gcc || command -v cc)"
 +exec "$RUSTC_BIN" -C linker="$NATIVE_LINKER" "${ARGS[@]}"
 diff --git a/rustc-switch-wrapper.sh b/rustc-switch-wrapper.sh
-index 008e20d..0768620 100755
+index 008e20d..fe8d0fa 100755
 --- a/rustc-switch-wrapper.sh
 +++ b/rustc-switch-wrapper.sh
-@@ -65,6 +65,8 @@ done
+@@ -33,6 +33,9 @@ fi
+ for arg in "$@"; do
+     case "$arg" in
+         *sanity_check_for_rust.rs*|*sanitycheckrs.rs*) RUST_TARGET= ;;
++        proc-macro|--crate-type=proc-macro|*linker=cc*|linker=cc)
++            exec "$RUSTC_BIN" "$@"
++            ;;
+     esac
+ done
+ 
+@@ -65,6 +68,8 @@ done
  # (e.g. the devkitpro-mesa-rust container) it does not exist and rustc would
  # fail with "linker not found".
  FALLBACK_LINKER=C:/msys64/ucrt64/bin/gcc.exe
@@ -86,7 +96,7 @@ index 008e20d..0768620 100755
      FALLBACK_LINKER="$(command -v cc || command -v gcc || true)"
  fi
 diff --git a/src/nouveau/compiler/nak/opt_instr_sched_common.rs b/src/nouveau/compiler/nak/opt_instr_sched_common.rs
-index 2d8be48..23b8e26 100644
+index 2d8be48..8cbce26 100644
 --- a/src/nouveau/compiler/nak/opt_instr_sched_common.rs
 +++ b/src/nouveau/compiler/nak/opt_instr_sched_common.rs
 @@ -284,12 +284,17 @@ pub fn estimate_variable_latency(sm: &ShaderModelInfo, op: &Op) -> u32 {
@@ -121,7 +131,7 @@ index 2d8be48..23b8e26 100644
          // Control-flow ops
          Op::WarpSync(_) => 16,
 diff --git a/src/nouveau/compiler/nak/sm50.rs b/src/nouveau/compiler/nak/sm50.rs
-index 294d71f..1fc4235 100644
+index 294d71f..f010543 100644
 --- a/src/nouveau/compiler/nak/sm50.rs
 +++ b/src/nouveau/compiler/nak/sm50.rs
 @@ -486,9 +486,12 @@ impl SM50Op for OpFAdd {
@@ -140,7 +150,7 @@ index 294d71f..1fc4235 100644
          }
      }
 diff --git a/src/nouveau/compiler/nak_nir.c b/src/nouveau/compiler/nak_nir.c
-index beb01b1..f667c15 100644
+index beb01b1..3f55767 100644
 --- a/src/nouveau/compiler/nak_nir.c
 +++ b/src/nouveau/compiler/nak_nir.c
 @@ -203,8 +203,19 @@ nak_optimize_nir(nir_shader *nir, const struct nak_compiler *nak)
@@ -165,7 +175,7 @@ index beb01b1..f667c15 100644
        };
        LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_peephole_select,
 diff --git a/src/nouveau/horizon/nouveau_horizon.h b/src/nouveau/horizon/nouveau_horizon.h
-index 6d99954..7f926c9 100644
+index 6d99954..2f91aac 100644
 --- a/src/nouveau/horizon/nouveau_horizon.h
 +++ b/src/nouveau/horizon/nouveau_horizon.h
 @@ -424,6 +424,14 @@ nouveau_horizon_runtime_put(struct nouveau_horizon_runtime *runtime);
@@ -184,7 +194,7 @@ index 6d99954..7f926c9 100644
  nouveau_horizon_device_create(
     struct nouveau_horizon_runtime *runtime,
 diff --git a/src/nouveau/horizon/nouveau_horizon_device.c b/src/nouveau/horizon/nouveau_horizon_device.c
-index a920be8..c350022 100644
+index a920be8..1f762aa 100644
 --- a/src/nouveau/horizon/nouveau_horizon_device.c
 +++ b/src/nouveau/horizon/nouveau_horizon_device.c
 @@ -61,19 +61,31 @@ nouveau_horizon_get_gm20b_info(struct nv_device_info *info_out)
@@ -291,7 +301,7 @@ index 0468efc..460f707 100644
  }
  
 diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.c b/src/nouveau/vulkan/nvk_cmd_buffer.c
-index bdd6bf6..2b01464 100644
+index bdd6bf6..73b6356 100644
 --- a/src/nouveau/vulkan/nvk_cmd_buffer.c
 +++ b/src/nouveau/vulkan/nvk_cmd_buffer.c
 @@ -18,6 +18,9 @@
@@ -982,7 +992,7 @@ index bdd6bf6..2b01464 100644
        struct nvk_push_descriptor_set *push_set = desc->sets[set_idx].push;
        uint64_t push_set_addr;
 diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.h b/src/nouveau/vulkan/nvk_cmd_buffer.h
-index 324a2b7..cfbfd21 100644
+index 324a2b7..bf131df 100644
 --- a/src/nouveau/vulkan/nvk_cmd_buffer.h
 +++ b/src/nouveau/vulkan/nvk_cmd_buffer.h
 @@ -121,6 +121,22 @@ struct nvk_descriptor_state {
@@ -1399,7 +1409,7 @@ index 324a2b7..cfbfd21 100644
  nvk_cmd_buffer_push_indirect(struct nvk_cmd_buffer *cmd,
                               uint64_t addr, uint32_t dw_count);
 diff --git a/src/nouveau/vulkan/nvk_cmd_draw.c b/src/nouveau/vulkan/nvk_cmd_draw.c
-index eac173e..12cc204 100644
+index eac173e..b77a127 100644
 --- a/src/nouveau/vulkan/nvk_cmd_draw.c
 +++ b/src/nouveau/vulkan/nvk_cmd_draw.c
 @@ -774,6 +774,137 @@ nvk_cmd_buffer_dirty_render_pass(struct nvk_cmd_buffer *cmd)
@@ -2463,7 +2473,7 @@ index eac173e..12cc204 100644
  
  VKAPI_ATTR void VKAPI_CALL
 diff --git a/src/nouveau/vulkan/nvk_cmd_meta.c b/src/nouveau/vulkan/nvk_cmd_meta.c
-index e27f000..16378fb 100644
+index e27f000..9da3675 100644
 --- a/src/nouveau/vulkan/nvk_cmd_meta.c
 +++ b/src/nouveau/vulkan/nvk_cmd_meta.c
 @@ -12,6 +12,8 @@
@@ -2688,7 +2698,7 @@ index 1107a00..2069e77 100644
  nvk_heap_contiguous_base_address(struct nvk_heap *heap)
  {
 diff --git a/src/nouveau/vulkan/nvk_image.c b/src/nouveau/vulkan/nvk_image.c
-index 69d0165..792cc56 100644
+index 69d0165..437971f 100644
 --- a/src/nouveau/vulkan/nvk_image.c
 +++ b/src/nouveau/vulkan/nvk_image.c
 @@ -2,6 +2,7 @@
@@ -2912,7 +2922,7 @@ index 4cf42d2..2f5ef65 100644
  
        result = nvk_queue_state_update(queue, &queue->state);
 diff --git a/src/nouveau/vulkan/nvk_shader.c b/src/nouveau/vulkan/nvk_shader.c
-index 1d79b6c..1c35bce 100644
+index 1d79b6c..29953fc 100644
 --- a/src/nouveau/vulkan/nvk_shader.c
 +++ b/src/nouveau/vulkan/nvk_shader.c
 @@ -2,6 +2,7 @@
@@ -3111,7 +3121,7 @@ index 1d79b6c..1c35bce 100644
     .cmd_bind_shaders = nvk_cmd_bind_shaders,
  };
 diff --git a/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_dev.c b/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_dev.c
-index ac47645..af49abf 100644
+index ac47645..e3f9f31 100644
 --- a/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_dev.c
 +++ b/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_dev.c
 @@ -31,6 +31,10 @@ struct nvkmd_switch_ctx {
@@ -3193,7 +3203,7 @@ index ac47645..af49abf 100644
  
     *ctx_out = &ctx->base;
 diff --git a/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_pdev.c b/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_pdev.c
-index 63ea5fd..8deee32 100644
+index 63ea5fd..65dc00b 100644
 --- a/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_pdev.c
 +++ b/src/nouveau/vulkan/nvkmd/switch/nvkmd_switch_pdev.c
 @@ -459,11 +459,42 @@ nvkmd_switch_try_create_pdev(struct vk_object_base *log_obj,
@@ -3242,7 +3252,7 @@ index 63ea5fd..8deee32 100644
        .has_dma_buf = false,
        /* nvMapCreate accepts a caller-supplied page-aligned pointer. */
 diff --git a/src/vulkan/runtime/vk_pipeline.c b/src/vulkan/runtime/vk_pipeline.c
-index 00523fb..cee351b 100644
+index 00523fb..477421c 100644
 --- a/src/vulkan/runtime/vk_pipeline.c
 +++ b/src/vulkan/runtime/vk_pipeline.c
 @@ -1145,6 +1145,53 @@ struct vk_graphics_pipeline {
@@ -3312,7 +3322,7 @@ index 00523fb..cee351b 100644
        for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
           struct vk_shader *shader = gfx_pipeline->stages[i].shader;
 diff --git a/src/vulkan/runtime/vk_pipeline.h b/src/vulkan/runtime/vk_pipeline.h
-index 3c7cafd..caa917d 100644
+index 3c7cafd..cac1059 100644
 --- a/src/vulkan/runtime/vk_pipeline.h
 +++ b/src/vulkan/runtime/vk_pipeline.h
 @@ -198,6 +198,17 @@ struct vk_pipeline_ops {

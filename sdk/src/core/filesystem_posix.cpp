@@ -123,6 +123,10 @@ std::filesystem::path GetExecutablePath() {
     }
     return std::filesystem::path(path);
   }
+  struct stat st;
+  if (stat("/switch/superman-returns-nx/superman_returns.nro", &st) == 0) {
+    return std::filesystem::path("/switch/superman-returns-nx/superman_returns.nro");
+  }
   return {};
 #else
   char buff[FILENAME_MAX] = "";

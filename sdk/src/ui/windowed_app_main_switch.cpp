@@ -58,6 +58,13 @@ namespace {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  static char default_argv0[] = "sdmc:/switch/superman-returns-nx/superman_returns.nro";
+  static char* default_argv[] = {default_argv0, nullptr};
+  if (argc <= 0 || argv == nullptr) {
+    argc = 1;
+    argv = default_argv;
+  }
+
   auto remaining = rex::cvar::Init(argc, argv);
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();
