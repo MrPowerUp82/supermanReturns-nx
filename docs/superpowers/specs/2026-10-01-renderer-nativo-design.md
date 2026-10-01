@@ -1,7 +1,8 @@
 # Renderer Vulkan nativo para Superman Returns NX
 
 Data: 2026-10-01. Base explorada: `1fa25c1`, com alterações locais do pack.
-Estado: desenho em conversa aprovado; especificação escrita aguardando revisão.
+Estado: desenho em conversa e especificação escrita aprovados pelo usuário em
+2026-10-01; plano de implementação sujeito a revisão antes da execução.
 
 ## Objetivo e escolhas aprovadas
 
