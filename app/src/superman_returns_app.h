@@ -4,12 +4,21 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
+#include <cstdlib>
+#include "sr_shader_registry.h"
+#if REX_PLATFORM_SWITCH
+#include <switch.h>
+extern "C" void SrTouchEmulatorTlsGuard();
+#endif
 
 class SupermanReturnsApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+#if REX_PLATFORM_SWITCH
+    SrTouchEmulatorTlsGuard();
+#endif
     return std::unique_ptr<SupermanReturnsApp>(
         new SupermanReturnsApp(ctx, "superman_returns", PPCImageConfig));
   }
@@ -29,11 +38,17 @@ class SupermanReturnsApp : public rex::ReXApp {
   void OnPostInitLogging() override {
     SetDefault("gpu_plugin", "xenos");
 #if REX_PLATFORM_SWITCH
+    if (envGetOwnProcessHandle() == INVALID_HANDLE) {
+      SetDefault("switch_eager_memory", "true");
+      // Use the NVDRV fence path while checking emulator command submission.
+      ::setenv("NVK_SWITCH_MAPPED_COMPLETION", "false", 0);
+    }
     SetDefault("mnk_mode", "false");
     // NFSMW's IO range cache has not been profiled with Superman's AST files.
     SetDefault("nfsmw_io_rangos_mb", "0");
 #endif
     REXLOG_INFO("Superman Returns NX: experimental Vulkan/Xenos boot build");
+    sr::native::InitializeRuntimeShaders();
   }
 
  private:

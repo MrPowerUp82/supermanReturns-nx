@@ -552,6 +552,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
 
                 case AluVectorOpcode::Dp4:
                 case AluVectorOpcode::Max4:
+                case AluVectorOpcode::Cube:
                     mask = 0b1111;
                     break;
 
@@ -816,24 +817,16 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             break;
 
         case AluVectorOpcode::Cube:
-            // Superman Returns: CUBE may read a constant (src1Select == 0); stock XenosRecomp always
-            // wrote r{}. Like the register path, the whole constant is passed without swizzle.
-            if (!instr.src1Select)
-            {
-                const uint32_t reg = instr.src1Register;
-                auto findResult = float4Constants.find(reg);
-                if (findResult == float4Constants.end())
-                    print("cube(c{}, cubeMapData)", reg);
-                else if (findResult->second->registerCount > 1)
-                    print("cube({}({}), cubeMapData)",
-                        reinterpret_cast<const char*>(constantTableData + findResult->second->name),
-                        reg - findResult->second->registerIndex);
-                else
-                    print("cube({}, cubeMapData)",
-                        reinterpret_cast<const char*>(constantTableData + findResult->second->name));
-                break;
+            // Superman Returns: use the ordinary operand reader for constants,
+            // relative addressing and abs/negate. Xenos CUBE operand 0 is Z_XY;
+            // .zwx reconstructs XYZ for the direction-based texture helper.
+            // Reference: Xenia SpirvShaderTranslator::ProcessVectorAluOperation.
+            print("cube(({}).zwxy, cubeMapData)", op(VECTOR_0));
+            if (vectorWriteMask != 0b1111) {
+                out += '.';
+                for (size_t i = 0; i < 4; ++i)
+                    if ((vectorWriteMask >> i) & 1) out += SWIZZLES[i];
             }
-            print("cube(r{}, cubeMapData)", instr.src1Register & 0x3F);
             break;
 
         case AluVectorOpcode::Max4:

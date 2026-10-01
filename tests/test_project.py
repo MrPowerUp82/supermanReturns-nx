@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import struct
 import unittest
 from unittest.mock import patch
 from argparse import Namespace
@@ -67,6 +68,25 @@ class PackageValidationTests(unittest.TestCase):
         self.assertEqual((output / 'superman_returns.nro').read_bytes(), self.nro.read_bytes())
         self.assertEqual(len(list((output / 'game_root/DATA').glob('*.AST'))), 12)
         self.assertTrue((output / 'superman_returns.toml').is_file())
+
+    def test_shader_library_is_copied(self):
+        shader = self.root / 'local.srsp'
+        shader.write_bytes(struct.pack('<8sIIQ', b'SRSSPV\0\0', 1, 1, 0))
+        args = self.args()
+        args.shader_library = shader
+        with patch.object(project, 'XEX_SHA256', self.hash):
+            project.package(args)
+        self.assertEqual((args.output / 'superman_returns_shaders.srsp').read_bytes(), shader.read_bytes())
+
+    def test_rejects_other_game_shader_library_before_copy(self):
+        shader = self.root / 'other.srsp'
+        shader.write_bytes(struct.pack('<8sIIQ', b'NFSSPV\0\0', 1, 1, 0))
+        args = self.args()
+        args.shader_library = shader
+        with patch.object(project, 'XEX_SHA256', self.hash):
+            with self.assertRaisesRegex(ValueError, 'shader library header'):
+                project.package(args)
+        self.assertFalse(args.output.exists())
 
 
 if __name__ == '__main__':

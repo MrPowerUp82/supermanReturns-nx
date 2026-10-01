@@ -5,8 +5,8 @@ Port experimental da versão Xbox 360 de **Superman Returns** para Nintendo Swit
 [StevensND/nfsmw-nx](https://github.com/StevensND/nfsmw-nx) e no projeto local
 `../superman_returns_recomp`.
 
-**Estado: projeto de boot, ainda sem NRO compilado ou teste no console. Não é uma
-versão jogável validada.** O backend inicial é Vulkan/Xenos sobre Mesa NVK. O
+**Estado: NRO compilado; inicialização parcial no Sudachi, sem teste no console.
+Não é uma versão jogável validada.** O backend inicial é Vulkan/Xenos sobre Mesa NVK. O
 renderizador nativo e as otimizações específicas de NFSMW não são usados.
 
 - `sdk/`: ReXGlue com memória, threads, áudio, entrada libnx e Vulkan do NFSMW-NX.
@@ -14,6 +14,8 @@ renderizador nativo e as otimizações específicas de NFSMW não são usados.
 - `tools/`: preparação com validação de SHA-256, codegen, build e pacote local.
 - `mesa/`: instruções e patch NVK da base; precisa ser compilado separadamente.
 - `config/`: configuração conservadora, resolução original e vídeos habilitados.
+- `shaders/`: geração local da biblioteca SPIR-V `.srsp`, carregada no NRO para
+  identificar recursos; os draws ainda usam Xenos. Veja [pipeline de shaders](docs/shaders.md).
 
 O manifesto suporta Title ID `454107ED`, Media ID `64A4002A`, versão `0.0.0.1`,
 SHA-256 `c8f243acd99de9a91f5ae4f409721c0e954e3d5eb96861419d3da07b8106db2b`.

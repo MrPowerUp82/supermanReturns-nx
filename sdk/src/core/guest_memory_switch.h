@@ -71,6 +71,9 @@ typedef enum {
 /* Reserves the window. size is usually 0x120000000. Returns the base or NULL. */
 uint8_t* RexGmInit(size_t size);
 
+/* Emulator compatibility mode: maps committed backing without waiting for data aborts. */
+bool RexGmEagerMapping(void);
+
 /* * Releases everything. */
 void RexGmShutdown(void);
 

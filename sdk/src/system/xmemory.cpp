@@ -13,6 +13,10 @@
 #include <cstring>
 #include <utility>
 
+#if REX_PLATFORM_SWITCH
+#include "../core/guest_memory_switch.h"
+#endif
+
 #if REX_PLATFORM_MAC
 #include <sys/mman.h>
 #endif
@@ -240,6 +244,15 @@ bool Memory::Initialize() {
   // Instead, physical memory is committed as it is touched: the first access to an
   // uncommitted page lands in the exception handler, which commits 1 MB and
   // retries the instruction (exception_handler_switch.cpp, step 0).
+  if (RexGmEagerMapping()) {
+    REXSYS_INFO("Precommitting physical guest memory for emulator compatibility");
+    if (!rex::memory::AllocFixed(heaps_.physical.TranslateRelative(0), heaps_.physical.heap_size(),
+                               rex::memory::AllocationType::kCommit,
+                               rex::memory::PageAccess::kReadWrite)) {
+      REXSYS_ERROR("Could not precommit physical guest memory for the emulator");
+      return false;
+    }
+  }
 #else
   rex::memory::AllocFixed(heaps_.physical.TranslateRelative(0), heaps_.physical.heap_size(),
                           rex::memory::AllocationType::kCommit,

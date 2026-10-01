@@ -21,6 +21,52 @@
     "repository": "devkitpro/devkita64",
     "digest": "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
   },
+  "shader_pipeline": {
+    "source": "nfsmw_nx at the commit recorded above, including its XenosRecomp modifications",
+    "reused": ["shaders/XenosRecomp", "shaders/nfsmw_hlsl.cpp", "shaders/nfsmw_contenedor.h"],
+    "adapted": ["2008 container scanner/validator", "sr_shader_library", "sr_pack", "build_library.sh"],
+    "local_changes": [
+      "256 pixel float constants instead of 224",
+      "128 temporary registers instead of 32",
+      "map every boolean array element",
+      "CUBE operand swizzle, abs/negate, relative constant addressing and partial destination mask",
+      "NORMAL0 interpolator",
+      "2008 physical container size is not required to be divisible by 12"
+    ],
+    "excluded_nfsmw_rewrites": ["PCF shadows", "minimum shadows", "radial blur"],
+    "dockerfile": "shaders/Dockerfile",
+    "docker_base": "debian:trixie-slim",
+    "local_image_id": "sha256:db59ca342807b142a6ab163ee5849533c67b3aeea3e0a82528e0e85bc60b9783",
+    "rebuild_versions_pinned": false,
+    "g++": "Debian 14.2.0-19",
+    "glibc": "2.41-12+deb13u4",
+    "spirv_tools": "v2025.1 (2025-03-18)",
+    "dxc": {
+      "release": "v1.9.2609",
+      "reported_version": "1.9(5512-01b62ad4)(1.9.2609.5)",
+      "asset": "linux_dxc_2026_09_28.x86_x64.tar.gz",
+      "local_archive": ".tools/dxc/dxc-linux.tar.gz",
+      "sha256": "96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1"
+    },
+    "optional_decompressed_image": {
+      "local_path": "../superman_returns_recomp/logs/image.bin",
+      "sha256": "629983cbecf6a607a5b1fceea9a4f7078cf554adc667dc0bb5c042c48de7d214",
+      "dump_recipe_available": false,
+      "distributed": false
+    },
+    "validated_local_output": {
+      "path": "out/shaders-cube-review/superman_returns_shaders.srsp",
+      "sha256": "26d2c05bb357507be0264da585f643e517695ffac66b72383d817db5036ce181",
+      "bytes": 9081800,
+      "containers": 529,
+      "unique_shaders": 167,
+      "loaded_by_application": true,
+      "runtime_evidence": "out/sudachi/superman_returns_016.log: 167 entries loaded before GPU initialization",
+      "used_for_draws": false,
+      "visual_validation": false,
+      "distributed": false
+    }
+  },
   "guest": {
     "title_id": "454107ED",
     "media_id": "64A4002A",

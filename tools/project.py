@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -107,6 +108,17 @@ def package(args):
             raise ValueError('Run prepare or pass --game-root')
         game = Path(json.loads(state.read_text(encoding='utf-8'))['game_root'])
     validate_game(game)
+    shader_library = getattr(args, 'shader_library', None)
+    if shader_library:
+        shader_library = shader_library.resolve()
+        if not shader_library.is_file() or not 24 <= shader_library.stat().st_size <= 64 * 1024 * 1024:
+            raise ValueError('Missing or oversized shader library')
+        with shader_library.open('rb') as stream:
+            header = stream.read(24)
+        magic, version, count, _ = struct.unpack('<8sIIQ', header)
+        if magic != b'SRSSPV\0\0' or version != 1 or not 1 <= count <= 4096:
+            raise ValueError('Invalid Superman shader library header')
+        # Full entry, checksum and SPIR-V validation is performed by the NRO loader.
     target = args.output.resolve()
     # Refuse overwrites and source nesting: do not recursively copy into game data.
     if target.exists():
@@ -116,6 +128,8 @@ def package(args):
     target.mkdir(parents=True)
     shutil.copy2(nro, target / 'superman_returns.nro')
     shutil.copy2(ROOT / 'config/superman_returns.toml', target / 'superman_returns.toml')
+    if shader_library:
+        shutil.copy2(shader_library, target / 'superman_returns_shaders.srsp')
     shutil.copytree(game, target / 'game_root')
     print(f'Local package: {target}. Copy this folder to sdmc:/switch/superman-returns-nx/')
 
@@ -136,6 +150,7 @@ def main(argv=None):
     cmd = commands.add_parser('package')
     cmd.add_argument('--nro', type=Path, default=ROOT / 'app/out/switch/superman_returns.nro')
     cmd.add_argument('--game-root', type=Path)
+    cmd.add_argument('--shader-library', type=Path, help='Optional local SRSSPV library for shader identification')
     cmd.add_argument('--output', type=Path, default=ROOT / 'dist/superman-returns-nx')
     cmd.set_defaults(action=package)
     args = parser.parse_args(argv)

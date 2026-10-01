@@ -7,6 +7,12 @@
 #include <malloc.h>
 #include <string.h>
 #include <switch.h>
+#include <rex/cvar.h>
+#include <rex/logging.h>
+
+REXCVAR_DEFINE_BOOL(switch_eager_memory, false, "Switch",
+                   "Map guest memory eagerly for emulators without data abort delivery")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 #include <map>
 #include <set>
@@ -112,6 +118,7 @@ struct State {
     size_t   committed = 0;
     size_t   mapped = 0;
     uint32_t last_result = 0;
+    bool eager = false;
 };
 
 State& S() {
@@ -123,13 +130,69 @@ State& S() {
  * hbloader hands the NRO a real handle to its own process, which the map SVCs
  * need: Horizon rejects the CUR_PROCESS_HANDLE pseudo-handle there. An NRO
  * started any other way (Sudachi's "load file", for example) gets
- * INVALID_HANDLE and every commit failed with 0xE401. yuzu-derived emulator
- * kernels do resolve the pseudo-handle, so it is the fallback; on the console
- * the port must still be started from hbloader (Homebrew Menu or forwarder).
+ * INVALID_HANDLE. MapProcessCodeMemory accepts the pseudo-handle on Sudachi,
+ * but MapProcessMemory explicitly rejects it. A local HIPC copy converts the
+ * pseudo-handle to a real handle, also verified on Ryujinx. Keep that handle
+ * alive for the process lifetime. The console normally uses hbloader's handle.
  */
+struct ProcessHandleRequest {
+    Handle server = INVALID_HANDLE;
+    Handle process = INVALID_HANDLE;
+    Result receive_result = 0;
+};
+
+void ReceiveProcessHandle(void* opaque) {
+    auto& request = *static_cast<ProcessHandleRequest*>(opaque);
+    // The HIPC buffer starts at armGetTls(), not at TLS + 0x80.
+    hipcMakeRequest(armGetTls(), HipcMetadata{});
+    s32 index = 0;
+    request.receive_result = svcReplyAndReceive(&index, &request.server, 1, INVALID_HANDLE,
+                                                2000000000ull);
+    if (R_SUCCEEDED(request.receive_result)) {
+        const auto received = hipcParseRequest(armGetTls());
+        if (received.meta.num_copy_handles == 1)
+            request.process = received.data.copy_handles[0];
+    }
+    // Closing the server wakes SendSyncRequest even if no valid request arrived.
+    svcCloseHandle(request.server);
+}
+
 Handle Proc() {
-    const Handle loader_handle = envGetOwnProcessHandle();
-    return loader_handle != INVALID_HANDLE ? loader_handle : CUR_PROCESS_HANDLE;
+    static const Handle process = [] {
+        const Handle loader_handle = envGetOwnProcessHandle();
+        if (loader_handle != INVALID_HANDLE) return loader_handle;
+        ProcessHandleRequest request;
+        Handle client = INVALID_HANDLE;
+        Result rc = svcCreateSession(&request.server, &client, 0, 0);
+        REXLOG_WARN("Own-process handle: create session 0x{:X}", rc);
+        if (R_FAILED(rc)) return Handle(CUR_PROCESS_HANDLE);
+        Thread receiver{};
+        rc = threadCreate(&receiver, ReceiveProcessHandle, &request, nullptr, 0x4000, 0x2C, -2);
+        REXLOG_WARN("Own-process handle: create receiver 0x{:X}", rc);
+        if (R_SUCCEEDED(rc)) {
+            rc = threadStart(&receiver);
+            REXLOG_WARN("Own-process handle: start receiver 0x{:X}", rc);
+            if (R_SUCCEEDED(rc)) {
+                HipcMetadata metadata{};
+                metadata.type = CmifCommandType_Request;
+                metadata.num_copy_handles = 1;
+                auto outgoing = hipcMakeRequest(armGetTls(), metadata);
+                outgoing.copy_handles[0] = CUR_PROCESS_HANDLE;
+                const Result send = svcSendSyncRequest(client);
+                threadWaitForExit(&receiver);
+                REXLOG_WARN("Own-process IPC handle: 0x{:X}, send 0x{:X}, receive 0x{:X}",
+                            request.process, send, request.receive_result);
+            } else {
+                svcCloseHandle(request.server);
+            }
+            threadClose(&receiver);
+        } else {
+            svcCloseHandle(request.server);
+        }
+        svcCloseHandle(client);
+        return request.process != INVALID_HANDLE ? request.process : Handle(CUR_PROCESS_HANDLE);
+    }();
+    return process;
 }
 
 bool Intersect(size_t a, size_t al, size_t b, size_t bl, size_t* lo, size_t* hi) {
@@ -376,6 +439,8 @@ uint8_t* RexGmInit(size_t size) {
         return nullptr;
     }
     s.size = size;
+    s.eager = REXCVAR_GET(switch_eager_memory);
+    REXLOG_INFO("Switch guest memory: {} mapping", s.eager ? "eager (emulator)" : "fault-driven");
     g_size_rapido.store(size, std::memory_order_release);
     g_base_rapido.store(s.base, std::memory_order_release);
     return s.base;
@@ -412,6 +477,8 @@ void RexGmShutdown(void) {
 }
 
 uint8_t* RexGmBase(void) { return g_base_rapido.load(std::memory_order_acquire); }
+
+bool RexGmEagerMapping(void) { return S().eager; }
 
 size_t RexGmSize(void) { return g_size_rapido.load(std::memory_order_acquire); }
 
@@ -468,6 +535,24 @@ bool RexGmAddView(uint8_t* base, size_t offset, size_t length) {
      * time it is touched.
      */
     s.views.push_back(v);
+    if (s.eager) {
+        const size_t vi = s.views.size() - 1;
+        for (const auto& [off, c] : s.chunks) {
+            size_t lo, hi;
+            if (Intersect(c.offset, c.length, v.offset, v.length, &lo, &hi) &&
+                !MapChunkIntoView(s, vi, c)) {
+                // Roll back the new view without disturbing any existing mappings.
+                for (const auto& [undo_off, undo] : s.chunks) {
+                    if (!s.view_mapped.erase({vi, undo.offset})) continue;
+                    if (!Intersect(undo.offset, undo.length, v.offset, v.length, &lo, &hi)) continue;
+                    UnmapWindowRange(s, static_cast<size_t>(v.base - s.base) + lo - v.offset,
+                                     static_cast<uint8_t*>(undo.shadow) + lo - undo.offset, hi - lo);
+                }
+                s.views.pop_back();
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -552,6 +637,20 @@ bool RexGmCommit(size_t offset, size_t length, RexGmAccess access) {
         const Chunk c{cur, tam, backing, shadow};
         s.chunks[cur] = c;
         s.committed += tam;
+        if (s.eager) {
+            for (size_t vi = 0; vi < s.views.size(); ++vi) {
+                size_t lo, hi;
+                const View& v = s.views[vi];
+                if (Intersect(c.offset, c.length, v.offset, v.length, &lo, &hi) &&
+                    !MapChunkIntoView(s, vi, c)) {
+                    UnmapChunkFromViews(s, c);
+                    s.chunks.erase(cur);
+                    s.committed -= tam;
+                    ReleaseChunk(c);
+                    return false;
+                }
+            }
+        }
 
         cur = hueco_fin;
     }

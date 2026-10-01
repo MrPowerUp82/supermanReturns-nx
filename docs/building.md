@@ -76,3 +76,20 @@ arquivos da pasta original e cria a configuração. Recusa sobrescrever um pacot
 existente; use `--output` para outro destino. A compilação não comprova boot.
 Após iniciar no console, recolha `rex*.log`, teste abertura, áudio, tela de título,
 Start, save/load e gameplay. Registre firmware, modelo e modo portátil/dock.
+
+## Biblioteca de shaders (identificação opcional no NRO)
+
+O pipeline em `shaders/build_library.sh` extrai os contêineres do próprio jogo,
+traduz para HLSL, compila para SPIR-V, valida e empacota em
+`superman_returns_shaders.srsp`. É um build host separado de Mesa e do NRO.
+O backend Xenos atual continua traduzindo shaders em execução: gerar ou copiar
+o `.srsp` habilita a identificação de recursos, mantendo os draws no Xenos.
+Para incluí-lo no pacote local:
+
+```powershell
+python tools/project.py package --shader-library out/shaders-cube-review/superman_returns_shaders.srsp --output dist/superman-shader-registry
+```
+
+A biblioteca deve ficar ao lado de `superman_returns.nro`. Arquivo ausente ou
+inválido gera um aviso no log. O comando Docker, as versões verificadas
+e os requisitos do futuro renderizador estão em [shaders.md](shaders.md).

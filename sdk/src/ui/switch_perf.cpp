@@ -903,6 +903,11 @@ __attribute__((constructor(102))) void StartProfiler() {
   }
   Register(envGetMainThreadHandle());
   std::strncpy(g_slots[0].name, "main (interfaz)", sizeof(g_slots[0].name) - 1);
+  // A direct emulator launch has no hbloader process handle or SaltyNX module.
+  // Avoid starting the console overlay worker during static initialization: its
+  // stderr probes race the application's stdio setup (observed null mutex in
+  // _write_r on Ryujinx), before the guest memory or game can initialize.
+  if (envGetOwnProcessHandle() == INVALID_HANDLE) return;
   // 0x2A: above everything in the game (audio runs at 0x2B), so the samples
   // are taken on time. It sleeps almost all the time.
   if (R_SUCCEEDED(__real_threadCreate(&g_thread, ProfilerMain, nullptr, nullptr, 0x10000, 0x2A,
