@@ -107,6 +107,7 @@ endif()
 # The GPU emulation consuming it lives in the rexgpu-xenos plugin.
 target_sources(rexcore PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/xenos.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pack_shader_sources.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/info.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/info_formats.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/extent.cpp

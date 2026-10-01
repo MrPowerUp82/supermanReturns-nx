@@ -1898,6 +1898,8 @@ bool VulkanCommandProcessor::SetupContext() {
 
   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
 
+  InitializePack();
+
   // Just not to expose uninitialized memory.
   std::memset(&system_constants_, 0, sizeof(system_constants_));
 
@@ -1906,6 +1908,7 @@ bool VulkanCommandProcessor::SetupContext() {
 
 void VulkanCommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
+  ShutdownPack();
 #if REX_PLATFORM_SWITCH
   if (RexNativeVideoShutdown) RexNativeVideoShutdown();
 #endif
@@ -3887,6 +3890,29 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     return draw_fail("render_target_update");
   }
 
+  // Shaders translated offline, if the draw can use them (pack_shaders.h).
+  if (pack_) {
+    PackDrawArguments pack_arguments;
+    pack_arguments.vertex_shader = vertex_shader;
+    pack_arguments.pixel_shader = pixel_shader;
+    pack_arguments.vertex_shader_translation = vertex_shader_translation;
+    pack_arguments.pixel_shader_translation = pixel_shader_translation;
+    pack_arguments.vertex_shader_modification = vertex_shader_modification;
+    pack_arguments.primitive_processing_result = &primitive_processing_result;
+    pack_arguments.normalized_depth_control = normalized_depth_control;
+    pack_arguments.normalized_color_mask = normalized_color_mask;
+    pack_arguments.primitive_polygonal = primitive_polygonal;
+    pack_arguments.memexport_used = memexport_writes_possible;
+    switch (IssuePackDraw(pack_arguments)) {
+      case PackDrawResult::kXenos:
+        break;
+      case PackDrawResult::kDrawn:
+        return true;
+      case PackDrawResult::kFailed:
+        return draw_fail("pack_draw");
+    }
+  }
+
   // Create the pipeline (for this, need the render pass from the render target
   // cache), translating the shaders - doing this now to obtain the used
   // textures.
@@ -5257,6 +5283,7 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
     // FIXME(Triang3l): This will result in a memory leak if the guest is not
     // presenting.
     uniform_buffer_pool_->Reclaim(frame_completed_);
+    PackBeginFrame();
     while (!single_transient_descriptors_used_.empty()) {
       const UsedSingleTransientDescriptor& used_transient_descriptor =
           single_transient_descriptors_used_.front();
@@ -5395,6 +5422,7 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     shared_memory_->EndSubmission();
 
     uniform_buffer_pool_->FlushWrites();
+    PackEndSubmission();
 
     // Submit sparse binds earlier, before executing the deferred command
     // buffer, to reduce latency.

@@ -98,6 +98,37 @@ class VulkanPipelineCache {
                                     const PipelineLayoutProvider*& pipeline_layout_out,
                                     bool* is_placeholder_out = nullptr) const;
 
+  // Shaders translated offline (pack_shaders.h) for the current draw. The fixed-function
+  // state comes from the same description as the guest pipeline of the draw (the Xenos
+  // translations are only used to build it); the stages, the layout and the vertex
+  // input are the pack's.
+  struct PackPipelineShaders {
+    VkShaderModule vertex = VK_NULL_HANDLE;
+    // VK_NULL_HANDLE for draws without a pixel shader.
+    VkShaderModule fragment = VK_NULL_HANDLE;
+    uint32_t vertex_specialization = 0;
+    uint32_t fragment_specialization = 0;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    const VkVertexInputBindingDescription* bindings = nullptr;
+    uint32_t binding_count = 0;
+    const VkVertexInputAttributeDescription* attributes = nullptr;
+    uint32_t attribute_count = 0;
+    // Identifies everything above except the layout (one per backend): the modules, the
+    // specialization and the vertex input.
+    uint64_t key = 0;
+  };
+  // Creates the pipeline synchronously the first time. Returns false if the state needs
+  // something the pack pipeline can't do (geometry or tessellation stages) or creation
+  // failed; created_out tells whether a new pipeline was made.
+  bool ConfigurePackPipeline(const VulkanShader::VulkanTranslation* vertex_shader,
+                             const VulkanShader::VulkanTranslation* pixel_shader,
+                             const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+                             reg::RB_DEPTHCONTROL normalized_depth_control,
+                             uint32_t normalized_color_mask,
+                             VulkanRenderTargetCache::RenderPassKey render_pass_key,
+                             const PackPipelineShaders& shaders, VkPipeline& pipeline_out,
+                             bool& created_out);
+
  private:
   REXPACKEDSTRUCT(ShaderStoredHeader, {
     uint64_t ucode_data_hash;
@@ -422,6 +453,22 @@ class VulkanPipelineCache {
   VkShaderModule depth_float24_round_fragment_shader_ = VK_NULL_HANDLE;
 
   std::unordered_map<PipelineDescription, Pipeline, PipelineDescription::Hasher> pipelines_;
+
+  // Pipelines with offline-translated shaders: the guest description of the draw and
+  // PackPipelineShaders::key. VK_NULL_HANDLE if creation failed (not retried).
+  struct PackPipelineKey {
+    PipelineDescription description;
+    uint64_t shaders_key;
+    bool operator==(const PackPipelineKey& other) const {
+      return description == other.description && shaders_key == other.shaders_key;
+    }
+    struct Hasher {
+      size_t operator()(const PackPipelineKey& key) const {
+        return size_t(key.description.GetHash() ^ key.shaders_key);
+      }
+    };
+  };
+  std::unordered_map<PackPipelineKey, VkPipeline, PackPipelineKey::Hasher> pack_pipelines_;
 
   // Previously used pipeline, to avoid lookups if the state wasn't changed.
   const std::pair<const PipelineDescription, Pipeline>* last_pipeline_ = nullptr;

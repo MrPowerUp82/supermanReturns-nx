@@ -46,6 +46,8 @@ set(REXGPU_XENOS_VULKAN_SOURCES
     vulkan/graphics_system.cpp
     vulkan/deferred_command_buffer.cpp
     vulkan/command_processor.cpp
+    vulkan/command_processor_pack.cpp
+    vulkan/pack_shaders.cpp
     vulkan/pipeline_cache.cpp
     vulkan/primitive_processor.cpp
     vulkan/render_target_cache.cpp

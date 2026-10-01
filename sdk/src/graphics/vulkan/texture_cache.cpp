@@ -682,6 +682,43 @@ VkImageView VulkanTextureCache::GetActiveBindingOrNullImageView(uint32_t fetch_c
   }
 }
 
+VkImageView VulkanTextureCache::GetActiveBindingPackImageView(uint32_t fetch_constant_index,
+                                                              xenos::FetchOpDimension dimension,
+                                                              bool is_signed) {
+  const TextureBinding* binding = GetValidTextureBinding(fetch_constant_index);
+  if (!binding) {
+    return VK_NULL_HANDLE;
+  }
+  // Exact dimensions only: no 3D sampled as 2D, no stacked 2D as 3D.
+  switch (dimension) {
+    case xenos::FetchOpDimension::k2D:
+      if (binding->key.dimension != xenos::DataDimension::k2DOrStacked) {
+        return VK_NULL_HANDLE;
+      }
+      break;
+    case xenos::FetchOpDimension::k3DOrStacked:
+      if (binding->key.dimension != xenos::DataDimension::k3D) {
+        return VK_NULL_HANDLE;
+      }
+      break;
+    case xenos::FetchOpDimension::kCube:
+      if (binding->key.dimension != xenos::DataDimension::kCube) {
+        return VK_NULL_HANDLE;
+      }
+      break;
+    default:
+      return VK_NULL_HANDLE;
+  }
+  bool use_signed = is_signed && texture_util::IsAnySignSigned(binding->swizzled_signs);
+  Texture* texture = use_signed && IsSignedVersionSeparateForFormat(binding->key)
+                         ? binding->texture_signed
+                         : binding->texture;
+  if (!texture) {
+    return VK_NULL_HANDLE;
+  }
+  return static_cast<VulkanTexture*>(texture)->GetView(use_signed, binding->host_swizzle, false);
+}
+
 VulkanTextureCache::SamplerParameters VulkanTextureCache::GetSamplerParameters(
     const VulkanShader::SamplerBinding& binding) const {
   const auto& regs = register_file();
