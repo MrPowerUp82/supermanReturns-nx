@@ -10,9 +10,11 @@
  */
 
 #include <cstring>
+#include <cerrno>
 
 #include <rex/kernel/xam/module.h>
 #include <rex/platform.h>
+#include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xsocket.h>
 // #include <rex/system/xnet.h>
@@ -54,6 +56,12 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
 
   native_handle_ = socket(af, type, proto);
   if (native_handle_ == -1) {
+#if !REX_PLATFORM_WIN32
+    const int socket_error = errno;
+    REXLOG_WARN("Guest socket creation failed: af={} type={} protocol={} errno={} ({})",
+                uint32_t(af), uint32_t(type), uint32_t(proto), socket_error,
+                std::strerror(socket_error));
+#endif
     return X_STATUS_UNSUCCESSFUL;
   }
 

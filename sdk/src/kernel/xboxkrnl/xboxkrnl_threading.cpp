@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/kernel/xboxkrnl/threading.h>
@@ -38,6 +39,12 @@
 #include <rex/system/xtypes.h>
 #include <rex/thread/atomic.h>
 #include <rex/thread/mutex.h>
+
+#if REX_PLATFORM_SWITCH
+REXCVAR_DEFINE_INT32(switch_guest_yield_us, 0, "CPU/Switch",
+                    "Diagnostic sleep in guest NtYieldExecution; zero keeps scheduler yield")
+    .range(0, 1000);
+#endif
 
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
@@ -390,6 +397,16 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 }
 
 u32 NtYieldExecution_entry() {
+#if REX_PLATFORM_SWITCH
+  const int delay_us = REXCVAR_GET(switch_guest_yield_us);
+  if (delay_us > 0) {
+    // Only the explicit guest yield export: keep lock spin waits and the
+    // rest of MaybeYield unchanged. Short waits let productive threads run.
+    rex::thread::Sleep(std::chrono::microseconds(delay_us));
+    rex::thread::SyncMemory();
+    return X_STATUS_SUCCESS;
+  }
+#endif
   rex::thread::MaybeYield();
   return X_STATUS_SUCCESS;
 }

@@ -38,6 +38,19 @@ class SupermanReturnsApp : public rex::ReXApp {
   void OnPostInitLogging() override {
     SetDefault("gpu_plugin", "xenos");
 #if REX_PLATFORM_SWITCH
+    SetDefault("switch_guest_yield_us", "0");
+    REXLOG_INFO("Switch guest yield sleep: {} us (set switch_guest_yield_us=0 for baseline)",
+                rex::cvar::GetFlagByName("switch_guest_yield_us"));
+    // The game creates sockets during its startup even before gameplay.
+    // libnx POSIX socket() needs the BSD service initialized by the application;
+    // NetDll_WSAStartup's POSIX implementation only fills the guest WSADATA.
+    // Keep the service alive until process teardown, after guest threads stop.
+    const Result socket_result = socketInitializeDefault();
+    if (R_SUCCEEDED(socket_result)) {
+      REXLOG_INFO("Switch BSD sockets initialized");
+    } else {
+      REXLOG_ERROR("Switch BSD socket initialization failed: 0x{:08X}", socket_result);
+    }
     if (envGetOwnProcessHandle() == INVALID_HANDLE) {
       SetDefault("switch_eager_memory", "true");
       // Use the NVDRV fence path while checking emulator command submission.
