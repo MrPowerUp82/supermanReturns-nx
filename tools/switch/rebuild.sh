@@ -7,6 +7,14 @@ export DEVKITPRO=/opt/devkitpro
 export PATH="$DEVKITPRO/devkitA64/bin:$DEVKITPRO/tools/bin:$PATH"
 SOURCE=/work/superman-source
 NVK=/project/.tools/mesa-sdk/opt/devkitpro/portlibs/switch
+# Incremental only: a clean environment has neither the synced sources nor the
+# configured build tree that compile-check.sh creates; run it first (a clean
+# full build is "tools/build-docker.sh game").
+if [ ! -f /work/game-check/CMakeCache.txt ] || [ ! -d "$SOURCE/app" ]; then
+  echo "rebuild.sh: /work/game-check or $SOURCE is not prepared; run compile-check.sh first" >&2
+  exit 1
+fi
+[ -f "$NVK/lib/libvulkan.a" ] || { echo "rebuild.sh: missing $NVK/lib/libvulkan.a" >&2; exit 1; }
 tar -cf - --exclude=app/out -C /project app sdk/src sdk/include sdk/cmake sdk/CMakeLists.txt \
   tools/switch/cmake | tar -xf - -C "$SOURCE"
 cmake -S "$SOURCE/app" -B /work/game-check -DREXGLUE_SWITCH_NVK_SDK="$NVK" >/dev/null

@@ -1,0 +1,97 @@
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index fb2060c..109c675 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -196,6 +196,13 @@ void DmaPusher::CallMethod(u32 argument) const {
+         });
+     } else {
+         auto subchannel = subchannels[dma_state.subchannel];
++        if (subchannel == nullptr) [[unlikely]] {
++            // No SET_OBJECT reached this subchannel yet, so there is no engine
++            // to receive the method. Guest commands must not crash the host.
++            LOG_ERROR(HW_GPU, "Method 0x{:X} on unbound subchannel {} ignored", dma_state.method,
++                      dma_state.subchannel);
++            return;
++        }
+         if (!subchannel->execution_mask[dma_state.method]) [[likely]] {
+             subchannel->method_sink.emplace_back(dma_state.method, argument);
+             return;
+@@ -212,6 +219,11 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) const {
+                                dma_state.method_count);
+     } else {
+         auto subchannel = subchannels[dma_state.subchannel];
++        if (subchannel == nullptr) [[unlikely]] {
++            LOG_ERROR(HW_GPU, "Method 0x{:X} on unbound subchannel {} ignored", dma_state.method,
++                      dma_state.subchannel);
++            return;
++        }
+         subchannel->ConsumeSink();
+         subchannel->current_dma_segment = dma_state.dma_get + dma_state.dma_word_offset;
+         subchannel->CallMultiMethod(dma_state.method, base_start, num_methods,
+diff --git a/src/video_core/macro/macro_jit_x64.cpp b/src/video_core/macro/macro_jit_x64.cpp
+index 7347cbd..2b96fbd 100644
+--- a/src/video_core/macro/macro_jit_x64.cpp
++++ b/src/video_core/macro/macro_jit_x64.cpp
+@@ -133,11 +133,39 @@ void MacroJITx64Impl::Compile_ALU(Macro::Opcode opcode) {
+         src_a = Compile_GetRegister(opcode.src_a, RESULT);
+         src_b = Compile_GetRegister(opcode.src_b, eax);
+     } else {
+-        if (!is_a_zero) {
+-            src_a = Compile_GetRegister(opcode.src_a, RESULT);
+-        }
+-        if (!is_b_zero) {
+-            src_b = Compile_GetRegister(opcode.src_b, eax);
++        // Always materialize both operands: Compile_GetRegister zeroes the
++        // destination for r0. Skipping the load left RESULT/eax holding the
++        // previous instruction's value, so "rD = r0 + r0" (a zero move) or
++        // "rD = r0 + rB" produced garbage.
++        src_a = Compile_GetRegister(opcode.src_a, RESULT);
++        src_b = Compile_GetRegister(opcode.src_b, eax);
++        // The operations below skip instructions that involve r0; produce
++        // their result here instead.
++        if (has_zero_register) {
++            switch (opcode.alu_operation) {
++            case Macro::ALUOperation::And:
++                xor_(src_a, src_a);
++                break;
++            case Macro::ALUOperation::Add:
++            case Macro::ALUOperation::Xor:
++            case Macro::ALUOperation::Or:
++                if (is_a_zero) {
++                    mov(src_a, src_b);
++                }
++                break;
++            case Macro::ALUOperation::Subtract:
++                if (is_a_zero) {
++                    sub(src_a, src_b);
++                }
++                break;
++            case Macro::ALUOperation::Nand:
++                if (is_a_zero) {
++                    mov(src_a, ~0u);
++                }
++                break;
++            default:
++                break;
++            }
+         }
+     }
+ 
+@@ -264,7 +292,7 @@ void MacroJITx64Impl::Compile_AddImmediate(Macro::Opcode opcode) {
+         }
+     } else {
+         auto result = Compile_GetRegister(opcode.src_a, RESULT);
+-        if (opcode.immediate > 2) {
++        if (opcode.immediate >= 2) {
+             add(result, opcode.immediate);
+         } else if (opcode.immediate == 1) {
+             inc(result);
+@@ -320,7 +348,7 @@ void MacroJITx64Impl::Compile_Read(Macro::Opcode opcode) {
+         }
+     } else {
+         auto result = Compile_GetRegister(opcode.src_a, RESULT);
+-        if (opcode.immediate > 2) {
++        if (opcode.immediate >= 2) {
+             add(result, opcode.immediate);
+         } else if (opcode.immediate == 1) {
+             inc(result);

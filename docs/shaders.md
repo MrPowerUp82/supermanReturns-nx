@@ -146,6 +146,18 @@ que invalidaria ponteiros. Para repetir no container de ferramentas:
 bash /work/shaders/test_registry.sh /work/out/shaders-cube-review/superman_returns_shaders.srsp
 ```
 
+Sem argumento, o mesmo teste usa uma biblioteca sintética (24 contêineres
+fabricados, sem dados do jogo) e também verifica o carregador: pacote alterado,
+de outro jogo, truncado, com bytes sobrando ou ausente é rejeitado. Roda em
+qualquer ambiente com g++ 13+ e os headers de xxHash exportados:
+
+```bash
+bash shaders/test_registry.sh
+```
+
+O teste CUBE (`test_translator.sh`) também roda fora do Docker, num host com
+glibc 2.38+: `DXC=$PWD/.tools/dxc/bin/dxc bash shaders/test_translator.sh`.
+
 O pacote opcional inclui a biblioteca com:
 
 ```powershell

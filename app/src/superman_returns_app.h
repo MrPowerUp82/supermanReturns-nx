@@ -42,6 +42,12 @@ class SupermanReturnsApp : public rex::ReXApp {
       SetDefault("switch_eager_memory", "true");
       // Use the NVDRV fence path while checking emulator command submission.
       ::setenv("NVK_SWITCH_MAPPED_COMPLETION", "false", 0);
+      // Buffer copies on the DMA engine instead of NVK's compute shader:
+      // yuzu-derived emulators read a storage buffer's size from the word
+      // after its address in constant buffer 0 (an NVN convention), which for
+      // NVK's copy shader is the other address, and allocate gigabytes on the
+      // host. Verified with tools/switch/vk-probe; see docs/vk-probe.md.
+      ::setenv("NVK_COPY_ENGINE", "1", 0);
     }
     SetDefault("mnk_mode", "false");
     // NFSMW's IO range cache has not been profiled with Superman's AST files.

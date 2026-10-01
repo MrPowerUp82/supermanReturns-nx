@@ -32,6 +32,19 @@
    `-DREXGLUE_SWITCH_NVK_SDK=<sdk>/opt/devkitpro/portlibs/switch`. The whole process is in
    [docs/building.md](../docs/building.md).
 
+## Superman Returns NX: second patch
+
+`mesa-switch-superman.patch` is applied **after** `mesa-switch-nfsmw.patch`
+(`tools/build-docker.sh` and `tools/build-docker.ps1` do both, in that order). It
+touches only `src/nouveau/horizon/`: when a channel is created, one GPFIFO entry
+binds the five GM20B classes to NVK's subchannels (0: 3D `B197`, 1: compute `B1C0`,
+2: inline-to-memory `A140`, 3: 2D `902D`, 4: copy `B0B5`), the layout deko3d uses,
+before the channel's built-in cache-acquire/fence blocks (3D methods on
+subchannel 0) can run against an unbound subchannel. It requests no syncpoint
+increment. Without it, Sudachi 1.0.15 crashes the host process on the first
+submit. `NOUVEAU_HORIZON_EARLY_BIND=false` restores the previous behavior. Evidence
+and the emulator-side issues are in [docs/vk-probe.md](../docs/vk-probe.md).
+
 ## What the patch changes
 
 One line per change. Why each one was needed, and how much it gained, is in [docs/mesa.md](../docs/mesa.md).

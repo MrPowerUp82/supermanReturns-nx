@@ -18,17 +18,26 @@ if (-not (Test-Path -LiteralPath "$mesa/.git")) {
 }
 $current = & git -C $mesa rev-parse HEAD
 if ($current -ne $commit) { throw "Mesa checkout must be $commit. Existing checkout was preserved." }
-# Accept the exact patch already applied; otherwise require a clean checkout.
+# The NFSMW patch, then this port's fixes on top (mesa-switch-superman.patch).
+# Accept either stage already applied; otherwise require a clean checkout.
 # Windows PowerShell turns native stderr into a terminating error under 'Stop'.
+$nfsmwPatch = "$root/mesa/mesa-switch-nfsmw.patch"
+$supermanPatch = "$root/mesa/mesa-switch-superman.patch"
 $ErrorActionPreference = 'Continue'
-& git -C $mesa apply --reverse --check "$root/mesa/mesa-switch-nfsmw.patch" 2>$null
-$alreadyApplied = $LASTEXITCODE -eq 0
+& git -C $mesa apply --reverse --check $supermanPatch 2>$null
+$supermanApplied = $LASTEXITCODE -eq 0
+& git -C $mesa apply --reverse --check $nfsmwPatch 2>$null
+$nfsmwApplied = $LASTEXITCODE -eq 0
 $ErrorActionPreference = 'Stop'
-if (-not $alreadyApplied) {
-    & git -C $mesa diff --quiet
-    if ($LASTEXITCODE -ne 0) { throw 'Mesa has other changes; existing files were preserved.' }
-    Run-Checked 'git' @('-C', $mesa, 'apply', '--check', "$root/mesa/mesa-switch-nfsmw.patch")
-    Run-Checked 'git' @('-C', $mesa, 'apply', "$root/mesa/mesa-switch-nfsmw.patch")
+if (-not $supermanApplied) {
+    if (-not $nfsmwApplied) {
+        & git -C $mesa diff --quiet
+        if ($LASTEXITCODE -ne 0) { throw 'Mesa has other changes; existing files were preserved.' }
+        Run-Checked 'git' @('-C', $mesa, 'apply', '--check', $nfsmwPatch)
+        Run-Checked 'git' @('-C', $mesa, 'apply', $nfsmwPatch)
+    }
+    Run-Checked 'git' @('-C', $mesa, 'apply', '--check', $supermanPatch)
+    Run-Checked 'git' @('-C', $mesa, 'apply', $supermanPatch)
 }
 Run-Checked 'docker' @('build', '--progress', 'plain', '-f', "$root/tools/switch/Dockerfile.mesa", '-t', $image, "$root/tools/switch")
 $mount = "type=bind,source=$root,target=/project"

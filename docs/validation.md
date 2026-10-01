@@ -143,3 +143,50 @@ linha 2). A GPU falhou em VA bind `0x1fffff0000` com `0x195c`, seguido de
 encerrado pelo limite do teste; permanecer aberto não comprovou execução do jogo.
 Pacote local gerado em `dist/superman-shader-registry/`, com NRO, configuração,
 biblioteca e os dados originais do jogo, sem alterar a origem.
+
+## Sessão Linux na nuvem: teste mínimo Vulkan e falha do Sudachi (2026-10-01)
+
+Ambiente: Ubuntu 24.04 x86_64, 4 núcleos, sem GPU. Ferramentas: devkitA64 GCC
+15.2.0 e libnx da imagem `devkitpro/devkita64` fixada (extraída para o host),
+LLVM/Clang 15.0.7 e SPIRV-Tools v2025.1 do Ubuntu, Rust nightly 1.101.0
+(2026-09-30), bindgen-cli 0.73.2, cbindgen 0.29.4, Meson 1.12.1, g++ 13.3.0.
+
+Testes executados:
+
+- `python -m unittest discover -s tests -v`: 15 testes (os 9 anteriores e 6 novos de
+  scripts: sem CRLF, `bash -n`, chaves das configurações do probe, SPIR-V embutido,
+  patch Mesa separado).
+- `shaders/test_translator.sh` com DXC 1.9.2609 Linux (SHA-256 do arquivo igual
+  ao de `provenance.json`), g++ 13.3.0 e spirv-val v2025.1: 8 casos CUBE passaram,
+  HLSL compilado e SPIR-V validado. Rodou no host, sem a imagem Docker.
+- `shaders/test_registry.sh` sem argumento: novo modo sintético, sem dados do jogo
+  (24 contêineres fabricados, duplicata colapsada). Carregador rejeitou pacote
+  alterado, de outro jogo, truncado, com bytes sobrando e ausente; registro passou
+  padding, truncamento, endereço reutilizado e reload. Com a biblioteca real,
+  o comportamento anterior continua (caminho como argumento).
+- `python tools/fetch_thirdparty.py`: falhava no Linux num link simbólico pendente
+  do MoltenVK (no Windows vira arquivo). Agora ignora links pendentes (7).
+
+Docker: o daemon funciona, mas a política de rede desta sessão bloqueia os
+espelhos Debian e o Docker Hub passou a limitar pulls. O Mesa foi compilado com o
+mesmo `build-mesa.sh` diretamente no host (LLVM 15 do Ubuntu em vez do Debian),
+com `/project` e `/work` apontando para o checkout. O fluxo Docker documentado
+(`tools/build-docker.sh mesa`) não foi executado até o fim aqui.
+
+Resultado principal: a falha `0xC0000005` do Sudachi foi reproduzida com
+`vk-probe.nro` (sem o jogo) num build Linux do Sudachi, explicada e corrigida no
+driver; dois problemas do emulador foram isolados. Detalhes e tabela de evidência
+em [vk-probe.md](vk-probe.md). O NRO do jogo não foi compilado nem executado nesta
+sessão (sem C++ gerado nem arquivos do jogo).
+
+### Ryujinx: reserva fixa (hipótese, não confirmada)
+
+Os valores do probe de plataforma batem com um `AllocSpace` com `FixedOffset` que
+devolve o início do bloco livre que contém o pedido, e não o endereço pedido:
+`0x400010000` → `0x1000` (primeiro bloco livre começando em `0x1000`) e
+`0x1fffff0000` → `0x400020000` (logo após a reserva anterior de 64 KiB). O mapa
+no endereço pedido falharia porque a reserva ficou registrada no endereço devolvido.
+O código do Ryujinx não está acessível desta sessão para confirmar; não foi feita
+nenhuma mudança para o Ryujinx. Próximo passo: comparar com
+`NvHostAsGpuDeviceFile.AllocSpace` e, se confirmado, decidir entre corrigir o
+emulador ou usar só reservas dinâmicas na camada Horizon do Mesa.

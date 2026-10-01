@@ -1,0 +1,63 @@
+diff --git a/src/shader_recompiler/CMakeLists.txt b/src/shader_recompiler/CMakeLists.txt
+index 9107446..cef0a77 100644
+--- a/src/shader_recompiler/CMakeLists.txt
++++ b/src/shader_recompiler/CMakeLists.txt
+@@ -266,3 +266,4 @@ create_target_directory_groups(shader_recompiler)
+ if (SUDACHI_USE_PRECOMPILED_HEADERS)
+     target_precompile_headers(shader_recompiler PRIVATE precompiled_headers.h)
+ endif()
++set_source_files_properties(backend/glsl/emit_glsl_context_get_set.cpp PROPERTIES COMPILE_OPTIONS "-w") # local diagnostic build
+diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
+index 4267993..26abe72 100644
+--- a/src/video_core/CMakeLists.txt
++++ b/src/video_core/CMakeLists.txt
+@@ -395,3 +395,5 @@ if (ARCHITECTURE_arm64)
+ endif()
+ 
+ create_target_directory_groups(video_core)
++set_source_files_properties(host1x/vic.cpp PROPERTIES COMPILE_OPTIONS "-msse4.1") # local diagnostic build
++set_source_files_properties(vulkan_common/vma.cpp PROPERTIES COMPILE_OPTIONS "-w") # local diagnostic build
+diff --git a/src/video_core/host1x/ffmpeg/ffmpeg.cpp b/src/video_core/host1x/ffmpeg/ffmpeg.cpp
+index a6a991f..b1e0593 100644
+--- a/src/video_core/host1x/ffmpeg/ffmpeg.cpp
++++ b/src/video_core/host1x/ffmpeg/ffmpeg.cpp
+@@ -224,7 +224,7 @@ bool DecoderContext::SendPacket(const Packet& packet) {
+ 
+ // Android can randomly crash when calling decode directly, so skip.
+ // TODO update ffmpeg and hope that fixes it.
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(SR_SYSTEM_FFMPEG)
+     if (!m_codec_context->hw_device_ctx && m_codec_context->codec_id == AV_CODEC_ID_H264) {
+         m_decode_order = true;
+         auto* codec{ffcodec(m_decoder.GetCodec())};
+@@ -249,7 +249,7 @@ bool DecoderContext::SendPacket(const Packet& packet) {
+ std::shared_ptr<Frame> DecoderContext::ReceiveFrame() {
+     // Android can randomly crash when calling decode directly, so skip.
+     // TODO update ffmpeg and hope that fixes it.
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(SR_SYSTEM_FFMPEG)
+     if (!m_codec_context->hw_device_ctx && m_codec_context->codec_id == AV_CODEC_ID_H264) {
+         m_decode_order = true;
+         auto* codec{ffcodec(m_decoder.GetCodec())};
+diff --git a/src/video_core/host1x/ffmpeg/ffmpeg.h b/src/video_core/host1x/ffmpeg/ffmpeg.h
+index 98b2508..25d51e1 100644
+--- a/src/video_core/host1x/ffmpeg/ffmpeg.h
++++ b/src/video_core/host1x/ffmpeg/ffmpeg.h
+@@ -13,6 +13,8 @@
+ #include "common/common_types.h"
+ #include "video_core/host1x/nvdec_common.h"
+ 
++// Local diagnostic build: the system FFmpeg has no codec_internal.h.
++#define SR_SYSTEM_FFMPEG 1
+ extern "C" {
+ #if defined(__GNUC__) || defined(__clang__)
+ #pragma GCC diagnostic push
+@@ -21,7 +23,7 @@ extern "C" {
+ 
+ #include <libavcodec/avcodec.h>
+ #include <libavutil/opt.h>
+-#ifndef ANDROID
++#if !defined(ANDROID) && !defined(SR_SYSTEM_FFMPEG)
+ #include <libavcodec/codec_internal.h>
+ #endif
+ 

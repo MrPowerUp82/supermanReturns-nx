@@ -19,10 +19,13 @@ do PC ainda não estão confirmados; os hooks nativos de NFSMW pertencem a outro
 Etapas para um port jogável:
 
 1. Compilação/link com devkitA64 + Mesa concluídos; NRO disponível localmente.
-2. Resolver o crash do Sudachi na inicialização NVK e validar o caminho de memória
-   eager; usar Ryujinx como comparação, com reserva GPU fixa e 39 bits pendentes.
-   Depois verificar threads, leitura AST e boot. Estado dos probes em
-   [validation.md](validation.md).
+2. Crash do Sudachi na inicialização NVK: causa encontrada e corrigida no driver
+   (`mesa/mesa-switch-superman.patch`), com teste mínimo `vk-probe.nro` passando
+   num build Linux do Sudachi, inclusive com o layout de memória eager; no Sudachi
+   instalado é preciso "Disable Macro JIT". Ver [vk-probe.md](vk-probe.md).
+   Pendente: NRO do jogo com a correção no Sudachi do Windows, depois threads,
+   leitura AST e boot. Ryujinx (reserva GPU fixa, 36 bits) continua pendente.
+   Estado dos probes em [validation.md](validation.md).
 3. Comparar imagens do Vulkan/Xenos com o D3D12 do PC e testar áudio/entrada/saves.
 4. Confirmar as funções XDK do Superman com capturas e análise do executável.
 5. Adaptar o renderizador nativo Vulkan do NFSMW: estados, tiling/resolve, formatos,

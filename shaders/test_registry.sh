@@ -7,4 +7,5 @@ ${CXX:-g++} -std=c++23 -O2 -pthread -I"$ROOT/../app/src" \
   -I"$ROOT/../sdk/thirdparty/xxHash" "$ROOT/test_registry.cpp" \
   "$ROOT/../app/src/sr_shader_library.cpp" "$ROOT/../app/src/sr_shader_registry.cpp" \
   -o "$OUT/test_registry"
-"$OUT/test_registry" "${1:?Expected local shader library path}"
+# Without an argument the test uses a synthetic library (no game data).
+"$OUT/test_registry" "${1:---synthetic}"

@@ -39,7 +39,7 @@ def main():
         run('git', 'checkout', '-q', 'FETCH_HEAD', cwd=work)
         run('git', 'submodule', 'update', '--init', '--recursive', cwd=work)
         source = os.path.join(work, 'thirdparty')
-        copied = kept = 0
+        copied = kept = dangling = 0
         for dirpath, dirnames, filenames in os.walk(source):
             dirnames[:] = [d for d in dirnames if d != '.git']
             for name in filenames:
@@ -48,6 +48,12 @@ def main():
                 if name in ('.git', '.gitignore'):
                     continue
                 src = os.path.join(dirpath, name)
+                # Some submodules (MoltenVK) contain symlinks into checkouts
+                # that are not part of the release. Windows clones them as
+                # plain files; on POSIX they dangle and cannot be copied.
+                if os.path.islink(src) and not os.path.exists(src):
+                    dangling += 1
+                    continue
                 dst = os.path.join(target, os.path.relpath(src, source))
                 if os.path.exists(dst):
                     kept += 1
@@ -62,7 +68,8 @@ def main():
                 marker = os.path.join(target, name, '.rex-dependency-complete')
                 with open(marker, 'w', encoding='utf-8') as stream:
                     stream.write(COMMIT + '\n')
-        print(f'{copied} files copied into sdk/thirdparty, {kept} files of this port kept')
+        print(f'{copied} files copied into sdk/thirdparty, {kept} files of this port kept, '
+              f'{dangling} dangling symlinks skipped')
     finally:
         if sys.version_info >= (3, 12):
             shutil.rmtree(work, onexc=remove_readonly)

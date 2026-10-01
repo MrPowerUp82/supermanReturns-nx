@@ -50,7 +50,37 @@ substitui o alias fraco, mantendo o símbolo da implementação original.
 O NRO de diagnóstico e os testes do emulador estão em [sudachi.md](sudachi.md).
 
 Siga [mesa/README.md](../mesa/README.md). Essa pasta mantém o patch da base para
-mesa-switch `1a8c1a66d6f`; sua aplicação ao Superman ainda não foi medida.
+mesa-switch `1a8c1a66d6f` (`mesa-switch-nfsmw.patch`) e, aplicado depois dele,
+`mesa-switch-superman.patch`, a correção de compatibilidade com o Sudachi descrita
+em [vk-probe.md](vk-probe.md). Os scripts aplicam os dois, nessa ordem.
+
+### Linux/macOS (sem PowerShell)
+
+`tools/build-docker.sh` faz o mesmo que `build-docker.ps1`, sem depender de nenhum
+arquivo preparado no Windows: clona o Mesa no commit fixado, aplica os patches,
+gera `.tools/mesa-build-source.tar` e roda os containers.
+
+```sh
+tools/build-docker.sh mesa       # driver em .tools/mesa-sdk/
+tools/build-docker.sh vk-probe   # out/probe/vk-probe.nro, teste mínimo sem o jogo
+tools/build-docker.sh game       # NRO do jogo (exige codegen e exports do SDK)
+```
+
+Atrás de um proxy HTTPS que intercepta TLS (CI, sandboxes), defina
+`BUILD_PROXY_CA=<bundle CA>` e `HTTPS_PROXY`: o script cria uma imagem base
+local que confia na CA e usa espelhos apt HTTPS. Sem essas variáveis, a imagem
+fixada é usada sem mudança.
+
+`build-mesa.sh` agora reextrai o tarball do Mesa a cada execução (o tar preserva
+os horários; o ninja só recompila o que mudou). Antes, um volume já preparado
+mantinha a fonte antiga e uma mudança de patch não chegava ao driver.
+`MESA_NATIVE_SETUP_ARGS` permite fixar o LLVM 15 em hosts com várias versões
+(`--native-file` com `llvm-config = '/usr/lib/llvm-15/bin/llvm-config'`).
+
+`rebuild.sh` é só incremental: exige `/work/game-check` e `/work/superman-source`
+criados por `compile-check.sh` e falha com mensagem clara sem eles.
+`compile-check.sh` usa um `libvulkan.a` vazio e tolera a falha de link: não é
+evidência de NRO compilado.
 `-MesaSdk` aponta para `opt/devkitpro/portlibs/switch` contendo `lib/libvulkan.a`.
 
 ```powershell

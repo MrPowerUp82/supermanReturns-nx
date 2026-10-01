@@ -1,0 +1,128 @@
+diff --git a/src/nouveau/horizon/nouveau_horizon_channel.c b/src/nouveau/horizon/nouveau_horizon_channel.c
+index e3f8ac8..62ce3d1 100644
+--- a/src/nouveau/horizon/nouveau_horizon_channel.c
++++ b/src/nouveau/horizon/nouveau_horizon_channel.c
+@@ -8,6 +8,7 @@
+ 
+ #include "util/os_time.h"
+ #include "util/u_atomic.h"
++#include "util/u_debug.h"
+ #include "util/u_math.h"
+ #include "util/u_memory.h"
+ 
+@@ -1557,6 +1558,11 @@ nouveau_horizon_channel_create(
+       commands, channel->syncpoint_id, NOUVEAU_HORIZON_COMPLETION_CPU);
+    commands += channel->cpu_fence_words;
+ 
++   const uint32_t engine_bind_offset_words = commands - channel->builtin_cpu;
++   const uint32_t engine_bind_words =
++      nouveau_horizon_gm20b_build_engine_bind(commands);
++   commands += engine_bind_words;
++
+    /* Always reserve the report layout so an ABI-constrained adapter can
+     * declare its 3D engine immediately after channel construction.  Storage
+     * remains inert unless mapped completion is explicitly enabled.
+@@ -1584,6 +1590,31 @@ nouveau_horizon_channel_create(
+       goto fail_native;
+    }
+ 
++   /* Bind the engine classes before anything else reaches the channel. The
++    * cache acquire, fences and reports above are 3D methods on subchannel 0,
++    * and the first of them is queued ahead of the client's own SET_OBJECT,
++    * i.e. against an unbound subchannel; NVK never binds the copy class on
++    * subchannel 4 at all. Emulators derived from yuzu (Sudachi 1.0.15)
++    * dereference the missing engine and crash the host process. Binding
++    * first is the order deko3d uses, and the 3D/compute init stream repeats
++    * the same SET_OBJECTs anyway. No syncpoint increment is requested, so
++    * fence values are unchanged.
++    * NOUVEAU_HORIZON_EARLY_BIND=false restores the previous behavior.
++    */
++   if (debug_get_bool_option("NOUVEAU_HORIZON_EARLY_BIND", true)) {
++      Result bind_rc = nvGpuChannelAppendEntry(
++         &channel->gpu_channel,
++         channel->builtin_addr + 4ull * engine_bind_offset_words,
++         engine_bind_words, GPFIFO_ENTRY_NOT_MAIN, 0);
++      if (R_SUCCEEDED(bind_rc))
++         bind_rc = nvGpuChannelKickoff(&channel->gpu_channel);
++      if (R_FAILED(bind_rc)) {
++         status = nouveau_horizon_status_from_result(
++            bind_rc, NOUVEAU_HORIZON_ERROR_SYSTEM);
++         goto fail_native;
++      }
++   }
++
+    simple_mtx_lock(&device->submit_mutex);
+    channel->id = device->next_channel_id++;
+    simple_mtx_unlock(&device->submit_mutex);
+diff --git a/src/nouveau/horizon/nouveau_horizon_gm20b.c b/src/nouveau/horizon/nouveau_horizon_gm20b.c
+index 460f707..297573a 100644
+--- a/src/nouveau/horizon/nouveau_horizon_gm20b.c
++++ b/src/nouveau/horizon/nouveau_horizon_gm20b.c
+@@ -7,7 +7,12 @@
+ 
+ #include "nouveau/headers/drf.h"
+ #include "nouveau/headers/nvidia/classes/cl906f.h"
++#include "nouveau/headers/nvidia/classes/cl902d.h"
++#include "nouveau/headers/nvidia/classes/cla140.h"
++#include "nouveau/headers/nvidia/classes/clb0b5.h"
+ #include "nouveau/headers/nvidia/classes/clb197.h"
++#include "nouveau/headers/nvidia/classes/clb1c0.h"
++#include "util/macros.h"
+ 
+ #include <assert.h>
+ 
+@@ -33,6 +38,36 @@ nouveau_horizon_gm20b_immediate_header(uint32_t method, uint32_t value)
+           NVVAL(NV906F, DMA_IMMD, ADDRESS, method >> 2);
+ }
+ 
++uint32_t
++nouveau_horizon_gm20b_build_engine_bind(uint32_t *commands)
++{
++   /* Method 0 of every class is SET_OBJECT. These are the classes and
++    * subchannels NVK addresses (nv_push.h SUBC_*) and the layout deko3d's
++    * queue setup binds; the 3D object context itself comes from libnx
++    * nvGpuChannelCreate.
++    */
++   static const uint32_t classes[] = {
++      MAXWELL_B,                 /* 0: SUBC_NV9097 */
++      MAXWELL_COMPUTE_B,         /* 1: SUBC_NV90C0 */
++      KEPLER_INLINE_TO_MEMORY_B, /* 2: SUBC_NV9039 */
++      FERMI_TWOD_A,              /* 3: SUBC_NV902D */
++      MAXWELL_DMA_COPY_A,        /* 4: SUBC_NV90B5 */
++   };
++   uint32_t *cmd = commands;
++   for (uint32_t subc = 0; subc < ARRAY_SIZE(classes); subc++) {
++      *cmd++ = NVDEF(NV906F, DMA_INCR, OPCODE, VALUE) |
++               NVVAL(NV906F, DMA_INCR, COUNT, 1) |
++               NVVAL(NV906F, DMA_INCR, SUBCHANNEL, subc) |
++               NVVAL(NV906F, DMA_INCR, ADDRESS, NVB197_SET_OBJECT >> 2);
++      *cmd++ = NVVAL(NVB197, SET_OBJECT, CLASS_ID, classes[subc]) |
++               NVVAL(NVB197, SET_OBJECT, ENGINE_ID, 0);
++   }
++
++   assert((uint32_t)(cmd - commands) ==
++          NOUVEAU_HORIZON_GM20B_ENGINE_BIND_WORDS);
++   return cmd - commands;
++}
++
+ uint32_t
+ nouveau_horizon_gm20b_build_cache_acquire(uint32_t *commands)
+ {
+diff --git a/src/nouveau/horizon/nouveau_horizon_gm20b.h b/src/nouveau/horizon/nouveau_horizon_gm20b.h
+index 658d73f..9eb9f11 100644
+--- a/src/nouveau/horizon/nouveau_horizon_gm20b.h
++++ b/src/nouveau/horizon/nouveau_horizon_gm20b.h
+@@ -17,6 +17,13 @@
+ #define NOUVEAU_HORIZON_GM20B_FENCE_CPU_WORDS 5u
+ #define NOUVEAU_HORIZON_GM20B_REPORT_WORDS 6u
+ #define NOUVEAU_HORIZON_GM20B_WAIT_WORDS_PER_FENCE 3u
++#define NOUVEAU_HORIZON_GM20B_ENGINE_BIND_WORDS 10u
++
++/* SET_OBJECT for the five GM20B classes on NVK's subchannels 0-4. Subchannel
++ * 0 (3D) is the one every builtin block below addresses.
++ */
++uint32_t
++nouveau_horizon_gm20b_build_engine_bind(uint32_t *commands);
+ 
+ uint32_t
+ nouveau_horizon_gm20b_build_cache_acquire(uint32_t *commands);
