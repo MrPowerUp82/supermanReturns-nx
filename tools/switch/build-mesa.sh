@@ -62,4 +62,7 @@ ninja -C builddir-switch -j"$JOBS" src/nouveau/vulkan/libvulkan.a
 STAGE=/project/.tools/mesa-sdk/opt/devkitpro/portlibs/switch/lib
 mkdir -p "$STAGE"
 cp builddir-switch/src/nouveau/vulkan/libvulkan.a "$STAGE/"
+# The MRI merge leaves an index without the bundled Rust std/core members, so
+# the game link reports core::panicking::* as undefined. Rebuild the index.
+aarch64-none-elf-ranlib "$STAGE/libvulkan.a"
 echo "Mesa SDK ready under .tools/mesa-sdk/opt/devkitpro/portlibs/switch"

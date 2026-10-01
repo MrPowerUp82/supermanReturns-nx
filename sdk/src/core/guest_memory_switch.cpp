@@ -119,7 +119,18 @@ State& S() {
     return s;
 }
 
-Handle Proc() { return envGetOwnProcessHandle(); }
+/*
+ * hbloader hands the NRO a real handle to its own process, which the map SVCs
+ * need: Horizon rejects the CUR_PROCESS_HANDLE pseudo-handle there. An NRO
+ * started any other way (Sudachi's "load file", for example) gets
+ * INVALID_HANDLE and every commit failed with 0xE401. yuzu-derived emulator
+ * kernels do resolve the pseudo-handle, so it is the fallback; on the console
+ * the port must still be started from hbloader (Homebrew Menu or forwarder).
+ */
+Handle Proc() {
+    const Handle loader_handle = envGetOwnProcessHandle();
+    return loader_handle != INVALID_HANDLE ? loader_handle : CUR_PROCESS_HANDLE;
+}
 
 bool Intersect(size_t a, size_t al, size_t b, size_t bl, size_t* lo, size_t* hi) {
     const size_t l = a > b ? a : b;

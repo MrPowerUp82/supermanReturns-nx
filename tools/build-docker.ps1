@@ -12,15 +12,19 @@ function Run-Checked([string]$Program, [string[]]$Arguments) {
 Run-Checked 'docker' @('info', '--format', '{{.ServerVersion}}')
 if (-not (Test-Path -LiteralPath "$mesa/.git")) {
     New-Item -ItemType Directory -Force "$root/.tools" | Out-Null
-    Run-Checked 'git' @('clone', '--no-checkout', '--depth', '1', 'https://github.com/danfromtico/mesa-switch.git', $mesa)
+    Run-Checked 'git' @('clone', '-c', 'core.autocrlf=false', '--no-checkout', '--depth', '1', 'https://github.com/danfromtico/mesa-switch.git', $mesa)
     Run-Checked 'git' @('-C', $mesa, 'fetch', '--depth', '1', 'origin', $commit)
     Run-Checked 'git' @('-C', $mesa, 'checkout', '--detach', 'FETCH_HEAD')
 }
 $current = & git -C $mesa rev-parse HEAD
 if ($current -ne $commit) { throw "Mesa checkout must be $commit. Existing checkout was preserved." }
 # Accept the exact patch already applied; otherwise require a clean checkout.
+# Windows PowerShell turns native stderr into a terminating error under 'Stop'.
+$ErrorActionPreference = 'Continue'
 & git -C $mesa apply --reverse --check "$root/mesa/mesa-switch-nfsmw.patch" 2>$null
-if ($LASTEXITCODE -ne 0) {
+$alreadyApplied = $LASTEXITCODE -eq 0
+$ErrorActionPreference = 'Stop'
+if (-not $alreadyApplied) {
     & git -C $mesa diff --quiet
     if ($LASTEXITCODE -ne 0) { throw 'Mesa has other changes; existing files were preserved.' }
     Run-Checked 'git' @('-C', $mesa, 'apply', '--check', "$root/mesa/mesa-switch-nfsmw.patch")

@@ -36,3 +36,27 @@ Foi detectado e corrigido o problema dos aliases do gerador portátil com GCC;
 uma checagem GCC/ELF confirmou símbolo original forte, alias fraco e substituição
 por hook forte. A checagem ARM64 passou com erros de atributos tratados como fatais.
 O código gerado permanece descartável e não foi editado.
+
+## NRO do jogo e primeiro boot no Sudachi (2026-10-01, segunda máquina)
+
+- Mesa NVK compilado no Docker (`libvulkan.a`, 95 MB). O checkout do Mesa agora
+  é clonado com `core.autocrlf=false`; com CRLF os scripts falhariam no Linux.
+- O archive gerado pelo merge MRI do Mesa tinha índice incompleto: os membros
+  `core`/`alloc`/`std` do Rust (NAK/NIL) não apareciam e o link acusava
+  `core::panicking::panic` indefinido. `build-mesa.sh` agora roda
+  `aarch64-none-elf-ranlib` no archive copiado.
+- Todos os objetos do SDK e os 145 arquivos recompilados compilaram com GCC 15.2.0
+  (`tools/switch/compile-check.sh`); link e empacotamento geraram
+  `app/out/switch/superman_returns.nro` (60 MB). `tools/switch/rebuild.sh` faz
+  rebuild incremental.
+- No Sudachi o NRO inicia: NVK detecta "NVIDIA Tegra X1 (GM20B)", Vulkan 1.3,
+  swapchain criado, VFS monta `game_root` (14 entradas).
+- Sem hbloader, `envGetOwnProcessHandle()` é inválido e todo commit da memória
+  guest falhava com `0xE401`. `guest_memory_switch.cpp` usa `CUR_PROCESS_HANDLE`
+  como fallback (aceito por kernels derivados do yuzu; no console continua
+  necessário iniciar pelo hbloader).
+- Limite do emulador: o núcleo de memória mapeia cada chunk nas vistas do 360
+  somente no data abort (`RexGmFaultIn`), e páginas protegidas/MMIO do Xenos
+  também dependem de faults. O Sudachi apenas registra `Unmapped Write` e não
+  entrega o abort ao handler do guest, então a execução trava logo após a
+  configuração da memória. Boot do jogo, imagem e gameplay exigem console.

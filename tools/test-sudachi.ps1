@@ -1,7 +1,7 @@
 param(
-    [string]$EmulatorDir = "$env:USERPROFILE/Downloads/sudachiemu.org-winpc-1-0-15",
+    [string]$EmulatorDir = $(if ($env:SUDACHI_DIR) { $env:SUDACHI_DIR } else { "$env:USERPROFILE/Music/sudachiemu.org-winpc-1-0-15" }),
     [string]$Nro,
-    [ValidateRange(10, 60)][int]$Seconds = 45
+    [ValidateRange(10, 900)][int]$Seconds = 45
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
