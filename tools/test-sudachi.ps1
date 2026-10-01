@@ -2,6 +2,9 @@ param(
     [string]$EmulatorDir = $(if ($env:SUDACHI_DIR) { $env:SUDACHI_DIR } else { "$env:USERPROFILE/Music/sudachiemu.org-winpc-1-0-15" }),
     [string]$Nro,
     [string]$EmulatorConfig,
+    # vk-probe.nro only: copied to sdmc:/switch/superman-returns-nx/vk-probe.cfg
+    # (see docs/vk-probe.md); without it any previous vk-probe.cfg is removed.
+    [string]$ProbeConfig,
     [ValidateRange(10, 900)][int]$Seconds = 45
 )
 $ErrorActionPreference = 'Stop'
@@ -12,6 +15,18 @@ if (-not (Test-Path -LiteralPath $emulator)) { throw "Missing emulator: $emulato
 if (-not (Test-Path -LiteralPath $Nro)) { throw "Build the NRO first: $Nro" }
 $output = "$root/out/sudachi"
 New-Item -ItemType Directory -Force $output | Out-Null
+$guestDir = "$env:APPDATA/sudachi/sdmc/switch/superman-returns-nx"
+$isVkProbe = (Split-Path -Leaf $Nro) -eq 'vk-probe.nro'
+if ($isVkProbe) {
+    New-Item -ItemType Directory -Force $guestDir | Out-Null
+    Remove-Item -LiteralPath "$output/vk-probe.log" -ErrorAction SilentlyContinue
+    if ($ProbeConfig) {
+        if (-not (Test-Path -LiteralPath $ProbeConfig)) { throw "Missing probe config: $ProbeConfig" }
+        Copy-Item -LiteralPath $ProbeConfig -Destination "$guestDir/vk-probe.cfg" -Force
+    } elseif (Test-Path -LiteralPath "$guestDir/vk-probe.cfg") {
+        Remove-Item -LiteralPath "$guestDir/vk-probe.cfg"
+    }
+}
 # Sudachi writes its normal emulator log under APPDATA. Keep a per-run copy.
 $start = Get-Date
 $arguments = @('--game', ('"' + [IO.Path]::GetFullPath($Nro) + '"'))
@@ -39,7 +54,7 @@ try {
 }
 $process.Refresh()
 $exitCode = $process.ExitCode
-$guestLogs = "$env:APPDATA/sudachi/sdmc/switch/superman-returns-nx/logs"
+$guestLogs = "$guestDir/logs"
 if (Test-Path -LiteralPath $guestLogs) {
     Get-ChildItem -LiteralPath $guestLogs -Filter '*.log' |
         Where-Object { $_.LastWriteTime -ge $start } |
@@ -47,10 +62,26 @@ if (Test-Path -LiteralPath $guestLogs) {
 }
 "started=$($start.ToString('o')) timeout=$timedOut exit_code=$exitCode" |
     Set-Content -LiteralPath "$output/run.log"
+$vkReport = "$guestDir/vk-probe.log"
+if ($isVkProbe -and (Test-Path -LiteralPath $vkReport) -and
+    (Get-Item -LiteralPath $vkReport).LastWriteTime -ge $start) {
+    # Copy before any failure so a crash still leaves the last BEGIN line.
+    Copy-Item -LiteralPath $vkReport -Destination "$output/vk-probe.log" -Force
+}
 if (-not $timedOut -and $exitCode -ne 0) {
     throw "Sudachi exited with code $exitCode. Logs: $output"
 }
-$report = "$env:APPDATA/sudachi/sdmc/switch/superman-returns-nx/platform-probe.log"
+if ($isVkProbe) {
+    if (-not (Test-Path -LiteralPath "$output/vk-probe.log")) {
+        throw "No fresh vk-probe.log; inspect $output/emulator.log"
+    }
+    Get-Content -LiteralPath "$output/vk-probe.log" |
+        Where-Object { $_ -match '^(BEGIN|END|RESULT)' -or $_ -match 'presented' }
+    if ((Get-Content -LiteralPath "$output/vk-probe.log" -Raw) -notmatch 'RESULT PASS') {
+        throw 'Vulkan probe did not pass; the last BEGIN line names the step that stopped.'
+    }
+}
+$report = "$guestDir/platform-probe.log"
 if ((Split-Path -Leaf $Nro) -eq 'platform-probe.nro') {
     if (-not (Test-Path -LiteralPath $report) -or (Get-Item -LiteralPath $report).LastWriteTime -lt $start) {
         throw "No fresh guest report; inspect $output/emulator.log"

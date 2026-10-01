@@ -32,3 +32,21 @@ fica em `switch/superman-returns-nx/`. O emulador permanece com seus dados exist
 Chega à inicialização NVK/Vulkan e à montagem do VFS, mas o Sudachi não entrega
 data aborts ao guest; o mapeamento sob demanda da memória do 360 e o MMIO não
 funcionam no emulador. Detalhes em [validation.md](validation.md).
+
+## Falha `0xC0000005` após o ZCULL e o teste Vulkan mínimo
+
+A falha foi reproduzida sem o jogo com `vk-probe.nro` e explicada em
+[vk-probe.md](vk-probe.md): o driver enviava métodos 3D a um subcanal ainda sem
+`SET_OBJECT` e o Sudachi desreferencia o motor nulo. O NRO compilado com
+`mesa/mesa-switch-superman.patch` corrige isso. No Sudachi instalado ainda é
+preciso ativar **Disable Macro JIT** (Emulation → Configure → Debug): o macro JIT
+do Sudachi calcula errado instruções MME que o NVK usa e o primeiro draw nunca
+termina. Teste recomendado antes do jogo:
+
+```powershell
+powershell -File tools/test-sudachi.ps1 -Nro out/probe/vk-probe.nro -Seconds 120 `
+  -ProbeConfig tools/switch/vk-probe/configs/copy-engine.cfg
+```
+
+Esperado: `RESULT PASS` e `presented 60 of 60 frames` em `out/sudachi/vk-probe.log`.
+Com `configs/early-bind-off.cfg` a falha antiga deve voltar (controle).

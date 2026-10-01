@@ -7,9 +7,11 @@ export MESA_SWITCH_RUST_TARGET=aarch64-unknown-linux-gnu
 JOBS=${JOBS:-4}
 MESA=/work/mesa
 mkdir -p "$MESA"
-if [ ! -d "$MESA/.git" ]; then
-    tar -xf /project/.tools/mesa-build-source.tar -C "$MESA"
-    python3 - "$MESA" <<'PY'
+# Re-sync on every run: the tarball carries the patched source, and a patch
+# change must reach the build tree. tar keeps mtimes, so ninja only rebuilds
+# the files that changed.
+tar -xf /project/.tools/mesa-build-source.tar -C "$MESA"
+python3 - "$MESA" <<'PY'
 from pathlib import Path
 import subprocess
 import sys
@@ -25,7 +27,6 @@ for entry in subprocess.check_output(['git', '-C', str(root), 'ls-files', '-s'],
         path = root / name
         path.chmod(path.stat().st_mode | 0o111)
 PY
-fi
 test "$(git -C "$MESA" rev-parse HEAD)" = 1a8c1a66d6fd8d65f10107c4627ffc3606ba5631
 rustup target add "$MESA_SWITCH_RUST_TARGET"
 mkdir -p /usr/local/libexec
@@ -36,11 +37,17 @@ chmod +x /usr/local/libexec/bindgen /usr/local/libexec/rustc
 cp "$MESA/src/gallium/winsys/nouveau/drm/nouveau.h" "$DEVKITPRO/portlibs/switch/include/"
 cp "$MESA/src/nouveau/headers/nv_device_info.h" "$DEVKITPRO/portlibs/switch/include/"
 if [ ! -d /usr/lib/llvm-15/lib/clang/15/include ]; then
-    ln -s /usr/lib/llvm-15/lib/clang/15.0.6/include /usr/lib/llvm-15/lib/clang/15/include
+    # The resource directory carries the point release (15.0.6 on bookworm).
+    CLANG_RESOURCE=$(ls -d /usr/lib/llvm-15/lib/clang/15.*/include | head -n 1)
+    mkdir -p /usr/lib/llvm-15/lib/clang/15
+    ln -s "$CLANG_RESOURCE" /usr/lib/llvm-15/lib/clang/15/include
 fi
 cd "$MESA"
 if [ ! -f builddir-native/build.ninja ]; then
-    meson setup builddir-native -Dvulkan-drivers= -Dgallium-drivers= \
+    # MESA_NATIVE_SETUP_ARGS lets hosts with several LLVMs pin LLVM 15, e.g.
+    # "--native-file llvm15.ini"; the Docker image only has LLVM 15.
+    # shellcheck disable=SC2086
+    meson setup builddir-native ${MESA_NATIVE_SETUP_ARGS:-} -Dvulkan-drivers= -Dgallium-drivers= \
       -Dshader-cache=true -Dplatforms= -Dglx=disabled -Degl=disabled \
       -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Dtools=[] \
       -Dllvm=enabled -Dmesa-clc=enabled -Dprecomp-compiler=enabled -Dinstall-mesa-clc=true
