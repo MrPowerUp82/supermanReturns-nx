@@ -132,7 +132,7 @@ Adicionar includes explícitos de `array`, `cstddef`, `cstdint`, `functional`,
 numéricos quando há constantes do SDK. `Services` recebe endereços de memória
 com os bits de endian originais; o adaptador interpreta-os como no SDK.
 
-## Tarefa 1: parser PM4 transacional e limites
+## Task 1: parser PM4 transacional e limites
 
 **Files:** Create `app/src/sr_native_ring.h/.cpp`,
 `tests/test_sr_native_ring.cpp`, `tests/test_sr_native.sh`.
@@ -181,7 +181,7 @@ static void TestPartialAndWrap() {
 - [ ] Rodar os testes e repetir com ASan/UBSan no host. Commit somente arquivos
   desta tarefa: `feat: add transactional native PM4 parser`.
 
-## Tarefa 2: efeitos de pacotes, indiretos e esperas
+## Task 2: efeitos de pacotes, indiretos e esperas
 
 **Files:** Modify `sr_native_ring.h/.cpp`, `tests/test_sr_native_ring.cpp`.
 
@@ -226,7 +226,7 @@ assert(sr::native::CompareWait(7, 0, 1, 0));
   SDK; garantir que callback de efeito não é chamado.
 - [ ] Todos os testes passam; commit `feat: execute native PM4 guest effects`.
 
-## Tarefa 3: sistema gráfico, memória e lifecycle
+## Task 3: sistema gráfico, memória e lifecycle
 
 **Files:** Create `app/src/sr_native_system.h/.cpp`,
 `tests/test_sr_native_lifecycle.cpp`; modify runner e `app/CMakeLists.txt`.
@@ -279,7 +279,7 @@ assert(stop.cancelled());
   fence que exija efeito de memória GPU ainda ausente permanece bloqueado.
 - [ ] Rodar host tests; commit `feat: add native graphics system and workers`.
 
-## Tarefa 4: apresentação Vulkan limpa
+## Task 4: apresentação Vulkan limpa
 
 **Files:** Create `app/src/sr_native_present.h/.cpp`; modify system/CMake/runner
 e `tests/test_sr_native_lifecycle.cpp`.
@@ -319,7 +319,7 @@ e `tests/test_sr_native_lifecycle.cpp`.
   de aquisição/submissão. Compilar e rodar host tests; commit
   `feat: present native boot frames through Vulkan`.
 
-## Tarefa 5: seleção do renderer e diagnósticos
+## Task 5: seleção do renderer e diagnósticos
 
 **Files:** Modify settings, app header, `THIRD_PARTY_NOTICES.md`; create
 `docs/native-renderer.md`.
@@ -361,7 +361,7 @@ void OnPreSetup(rex::RuntimeConfig& config) override {
   Esperado: nenhum uso ativo. Compilar; commit
   `feat: select native renderer and report boot progress`.
 
-## Tarefa 6: build reproduzível e coleta do teste físico
+## Task 6: build reproduzível e coleta do teste físico
 
 **Files:** Create `tools/switch/native-report.py`; test
 `tests/test_native_report.py`; document procedure in `docs/native-renderer.md`.
@@ -409,7 +409,7 @@ docker run --rm --mount "type=bind,source=C:/Users/webpa/OneDrive/Documentos/pro
   quando isso preservar mudanças posteriores do usuário.
 - [ ] Commit somente script/teste/docs: `test: collect native boot diagnostics`.
 
-## Tarefa 7: aceite do marco e passagem
+## Task 7: aceite do marco e passagem
 
 **Files:** Update `docs/native-renderer.md`; create `checkpoint6.md`.
 
