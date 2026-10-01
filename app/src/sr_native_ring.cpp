@@ -360,7 +360,14 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       if (source == uint32_t(SourceSelect::kImmediate)) return kBlocked;
       uint32_t mode;
       if (!Read(false, XE_GPU_REG_RB_MODECONTROL, mode)) return kBlocked;
-      if ((mode & 7) == uint32_t(EdramMode::kCopy) || (start && p[0] & 0x100)) return kBlocked;
+      switch (static_cast<EdramMode>(mode & 7)) {
+        case EdramMode::kNoOperation:
+        case EdramMode::kColorDepth:
+        case EdramMode::kDepthOnly:
+          break;
+        default: return kBlocked;  // Copy and undefined modes have no harmless draw interpretation.
+      }
+      if (start && p[0] & 0x100) return kBlocked;
       for (uint32_t stage = 0; stage != 2; ++stage) {
         if (shader_loaded_[stage] && (!services_.shader_is_memory_safe ||
             !services_.shader_is_memory_safe(stage, shaders_[stage]))) {

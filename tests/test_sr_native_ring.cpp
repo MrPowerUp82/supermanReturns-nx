@@ -263,6 +263,53 @@ static void PredicateTests() {
   assert(f.writes == 1);
   assert(Run(e, Packet(PM4_XE_SWAP, {0x53574150, 0x1000, 1280, 720}, true)) == PacketResult::kConsumed);
   assert(f.presents == 0);
+  auto set = [&](uint32_t op, std::initializer_list<uint32_t> values) {
+    assert(Run(e, Packet(op, values)) == PacketResult::kConsumed);
+  };
+  auto predicate = [&](bool passes) {
+    const auto before = f.writes;
+    assert(Run(e, Packet(PM4_MEM_WRITE, {0x100, 1}, true)) == PacketResult::kConsumed);
+    assert(f.writes == before + unsigned(passes));
+  };
+  // Cross combined and split forms with asymmetric halves. A swapped word order
+  // or a split write that destroys the other half changes observable effects.
+  set(PM4_SET_BIN_MASK, {2, 1});
+  set(PM4_SET_BIN_SELECT_LO, {1}); set(PM4_SET_BIN_SELECT_HI, {4}); predicate(true);
+  set(PM4_SET_BIN_SELECT_LO, {0}); predicate(false);
+  set(PM4_SET_BIN_SELECT_HI, {2}); predicate(true);
+  set(PM4_SET_BIN_MASK_LO, {0}); predicate(true);
+  set(PM4_SET_BIN_MASK_HI, {0}); predicate(false);
+  set(PM4_SET_BIN_MASK_HI, {4}); set(PM4_SET_BIN_MASK_LO, {8});
+  set(PM4_SET_BIN_SELECT, {16, 8}); predicate(true);
+  set(PM4_SET_BIN_MASK_LO, {0}); predicate(false);
+  set(PM4_SET_BIN_MASK_HI, {16}); predicate(true);
+}
+static void DrawModeTests() {
+  for (uint32_t mode = 0; mode != 8; ++mode) {
+    for (bool loaded : {false, true}) {
+      for (bool dma : {false, true}) {
+        Fixture f; auto services = f.services();
+        unsigned proofs = 0;
+        services.shader_is_memory_safe = [&](uint32_t, std::span<const uint32_t>) {
+          ++proofs; return true;
+        };
+        RingExecutor e(services);
+        if (loaded) assert(Run(e, Packet(PM4_IM_LOAD_IMMEDIATE, {0, 0})) == PacketResult::kConsumed);
+        f.regs[XE_GPU_REG_RB_MODECONTROL] = 0x100 | mode;  // Unrelated bits do not change the mode.
+        const bool ordinary = mode == uint32_t(EdramMode::kNoOperation) ||
+                              mode == uint32_t(EdramMode::kColorDepth) ||
+                              mode == uint32_t(EdramMode::kDepthOnly);
+        auto draw = dma ? Packet(PM4_DRAW_INDX, {0, 0, 0x1000, 10}) :
+                          Packet(PM4_DRAW_INDX_2, {2u << 6});
+        Cursor cursor{draw, 0, uint32_t(draw.size() / 4), 0};
+        assert(e.ProcessNext(cursor) == (ordinary ? PacketResult::kConsumed : PacketResult::kBlocked));
+        assert(cursor.position == (ordinary ? cursor.end : 0));
+        assert(f.writes == (ordinary ? (dma ? 3u : 1u) : 0u));
+        assert(e.counters().draws_omitted == unsigned(ordinary));
+        assert(proofs == unsigned(ordinary && loaded));
+      }
+    }
+  }
 }
 static void IndirectTests() {
   Fixture f;
@@ -475,4 +522,5 @@ int main() {
   ParserTests(); WaitTests(); EffectTests(); BlockedAndMalformedTests(); PredicateTests(); IndirectTests();
   ShaderSafetyTests(); ReplayTests(); ReadOnlyAndCapacityTests();
   DefensiveTests();
+  DrawModeTests();
 }
