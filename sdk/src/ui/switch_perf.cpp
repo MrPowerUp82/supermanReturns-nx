@@ -103,7 +103,7 @@ constexpr u64 kReportSeconds = 10;
 constexpr u64 kStartDelayNs = 8000000000ULL;
 constexpr size_t kMaxSamples = 1 << 15;
 constexpr size_t kFrames = 10;
-constexpr unsigned kCounterCount = 33;
+constexpr unsigned kCounterCount = 36;
 // In <NRO folder>/logs/rex/ (switch_crash_hooks.c computes it at startup).
 std::string ReportPath() {
   return std::string(RexSwitchLogDir()) + "rex_perfil.log";
@@ -543,6 +543,13 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
                  "640-1279 %.0f | 256-639 %.0f | menos de 256 %.0f\n",
                  delta(28) / frames, delta(29) / frames, delta(30) / frames, delta(31) / frames,
                  delta(32) / frames);
+    // Offline shader pack (command_processor_pack.cpp): only when it saw a draw.
+    if (delta(33) + delta(34) + delta(35) > 0) {
+      std::fprintf(f,
+                   "     shaders precompilados: %.1f dibujados con el pack | %.1f con los dos shaders "
+                   "en el pack pero por Xenos | %.1f con un shader fuera del pack\n",
+                   delta(33) / frames, delta(34) / frames, delta(35) / frames);
+    }
   }
 
   for (unsigned i = 0; i < kCounterCount; ++i) {
@@ -1062,7 +1069,9 @@ void RexSwitchPerfCount(unsigned id) {
  * 12 render targets transferred, 13 transfer draws, 14 textures loaded,
  * 15 shared memory bytes uploaded, 16 pipelines created, 17 physical memory
  * chunks committed on touch, 18 chunks mapped into a view on touch,
- * 21 clipped audio samples, 22 audio buffers with a peak of 0.98 or more.
+ * 21 clipped audio samples, 22 audio buffers with a peak of 0.98 or more,
+ * 33 draws with the offline shader pack, 34 draws whose shaders are both in the pack
+ * but went to Xenos, 35 draws with a shader outside the pack.
  */
 void RexSwitchPerfAdd(unsigned id, u64 value) {
   if (id < kCounterCount) {

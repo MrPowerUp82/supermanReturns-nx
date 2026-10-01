@@ -13,6 +13,7 @@ class ShaderRegistry {
   void RememberEngineResource(uint32_t resource, const Shader* shader);
   const Shader* FindEngineResource(uint32_t resource) const;
   size_t size() const { return library_.shaders().size(); }
+  const std::vector<Shader>& shaders() const { return library_.shaders(); }
  private:
   BibliotecaShaders library_;
   bool loaded_ = false;

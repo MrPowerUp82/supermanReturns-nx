@@ -67,6 +67,11 @@ class SupermanReturnsApp : public rex::ReXApp {
     SetDefault("nfsmw_io_rangos_mb", "0");
 #endif
     REXLOG_INFO("Superman Returns NX: experimental Vulkan/Xenos boot build");
+    // Drawing with the offline shader pack needs the device features its SPIR-V
+    // declares (64-bit integers, buffer addresses, descriptor arrays); they are
+    // chosen when the Vulkan device is created, after this point.
+    if (rex::cvar::GetFlagByName("pack_shaders") == "draw")
+      SetDefault("vulkan_native_shader_features", "true");
     sr::native::InitializeRuntimeShaders();
   }
 

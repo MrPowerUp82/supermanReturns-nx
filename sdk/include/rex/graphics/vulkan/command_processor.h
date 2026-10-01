@@ -429,6 +429,42 @@ class VulkanCommandProcessor : public CommandProcessor {
   bool IssueDraw_MemexportReadbackFullPath(uint32_t total_size);
   bool IssueDraw_MemexportReadbackFastPath(uint32_t total_size);
 
+  // Draws with shaders translated offline (pack_shaders.h, command_processor_pack.cpp).
+  struct PackState;
+  struct PackStateDeleter {
+    void operator()(PackState* state) const;
+  };
+  struct PackDrawArguments {
+    VulkanShader* vertex_shader;
+    VulkanShader* pixel_shader;
+    VulkanShader::VulkanTranslation* vertex_shader_translation;
+    VulkanShader::VulkanTranslation* pixel_shader_translation;
+    SpirvShaderTranslator::Modification vertex_shader_modification;
+    const PrimitiveProcessor::ProcessingResult* primitive_processing_result;
+    reg::RB_DEPTHCONTROL normalized_depth_control;
+    uint32_t normalized_color_mask;
+    bool primitive_polygonal;
+    bool memexport_used;
+  };
+  enum class PackDrawResult {
+    // Not drawn: continue with the Xenos pipeline.
+    kXenos,
+    kDrawn,
+    // Something failed after the draw was committed to the pack (no fallback).
+    kFailed,
+  };
+  // Loads the registered pack and creates its Vulkan objects. With a missing pack or
+  // missing device features, the pack stays off and every draw uses Xenos.
+  void InitializePack();
+  void ShutdownPack();
+  static void DestroyPackVulkanObjects(const ui::vulkan::VulkanDevice* vulkan_device,
+                                       PackState& state);
+  void PackBeginFrame();
+  void PackEndSubmission();
+  // Counts the coverage of the draw (identify and draw modes) and, in draw mode,
+  // records it with the pack if possible.
+  PackDrawResult IssuePackDraw(const PackDrawArguments& arguments);
+
   void SplitPendingBarrier();
 
   void DestroyScratchBuffer();
@@ -787,6 +823,9 @@ class VulkanCommandProcessor : public CommandProcessor {
   // Currently used samplers.
   std::vector<std::pair<VulkanTextureCache::SamplerParameters, VkSampler>> current_samplers_vertex_;
   std::vector<std::pair<VulkanTextureCache::SamplerParameters, VkSampler>> current_samplers_pixel_;
+
+  // Offline-translated shader pack; null when the pack isn't used.
+  std::unique_ptr<PackState, PackStateDeleter> pack_;
 
   // Cache render pass currently started in the command buffer with the
   // framebuffer. For dynamic rendering, current_render_pass_ is VK_NULL_HANDLE

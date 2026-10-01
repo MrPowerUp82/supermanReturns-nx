@@ -166,14 +166,61 @@ python tools/project.py package --shader-library out/shaders-cube-review/superma
 
 O pacote confere apenas tamanho e cabeçalho; a validação completa ocorre no NRO.
 
+## Draws com o pack dentro do backend Xenos (2026-10-01)
+
+Primeira ligação dos SPIR-V aos draws. Não é um renderer nativo: o D3D do jogo
+continua escrevendo o ring PM4 e o processador de comandos Xenos continua dono de
+render targets, texturas, resolves e processamento de primitivas. Só os shaders
+mudam, e só nos draws que o pack consegue reproduzir; o resto continua no Xenos.
+
+- O app registra as entradas do `.srsp` (`rex/graphics/pack_shader_sources.h`).
+  O cvar `pack_shaders` escolhe `off`, `identify` (padrão: conta, desenha com Xenos)
+  ou `draw`. Com `draw`, o app liga `vulkan_native_shader_features`, porque o SPIR-V
+  declara Int64, endereços de buffer e arrays de descritores sem tamanho.
+- Identificação no IM_LOAD (`sdk/src/graphics/vulkan/pack_shaders.cpp`, adaptada de
+  `nfsmw_nativo_shaders.cpp`): pixel shader por microcódigo inteiro; vertex shader
+  com os fetches declarados reduzidos ao que o D3D não altera (opcode, registradores,
+  predicado) e ordenados, porque o D3D reescreve constante de fetch, formato, stride,
+  offset e swizzle e pode reordenar os fetches. Contêineres com o mesmo microcódigo e
+  SPIR-V diferente ficam com o Xenos.
+- A entrada de vértices sai dos fetches já corrigidos pelo D3D: formato Vulkan,
+  stride, offset e `g_InputRemap` por localização (lógica de `CalcularEntrada`). Os
+  vértices usados pelo draw são copiados do guest com a troca de bytes do fetch
+  constant; índices DMA são convertidos para a ordem do host (o VS Xenos fazia isso
+  no shader).
+- Pipeline próprio (`VulkanPipelineCache::ConfigurePackPipeline`): o estado fixo vem
+  da mesma descrição do pipeline Xenos do draw; estágios, layout e entrada de
+  vértices são do pack. Layout: sets 0-2 `Texture2D/3D/Cube[]`, set 3 samplers,
+  índice = fetch constant (`PARTIALLY_BOUND`); set 4 com as constantes VS e PS
+  (256 `float4` cada, direto dos registradores) e o bloco compartilhado (booleanos,
+  alfa, `g_NdcScale/Offset` do viewport Xenos com Y negado por causa do
+  `-fvk-invert-y`, remapeamentos). Especialização: UBO, função de alfa, R11G11B10.
+- Volta para o Xenos, com contador por motivo: shader fora do pack, retângulos,
+  pontos, quads e fans (precisam de geometry shader), memexport, posição pré-dividida
+  ou 1/W, planos de recorte ou kill de vértice, render target gamma/7e3/16 bits fixo
+  ou com expoente, PS que escreve profundidade, alpha-to-coverage, textura com sinal
+  misto, bias, gamma ou expoente, textura 1D ou de vertex shader, índices convertidos
+  pelo Xenos, Z de OpenGL ou invertido.
+
+Teste sem jogo nem GPU: `bash shaders/test_pack_identify.sh` (sintético) ou com
+`out/shaders-cube-review/containers` como argumento. Em 2026-10-01: VS corrigido e
+reordenado identificado, entrada de vértices e stream separado conferidos, alterações
+de ALU e de registrador rejeitadas; dos 167 contêineres distintos, 165 identificados
+com a própria tradução e 2 PS deixados para o Xenos (mesmo microcódigo, SPIR-V
+diferente). Isso não valida a imagem nem o comportamento no console.
+
+Contadores no `rex_perfil.log` ("shaders precompilados") e resumo a cada 10 s no log
+(`Shader pack (...)`: microcódigos identificados, draws cobertos, desenhados com o
+pack, pipelines e motivos de volta ao Xenos).
+
 ## Renderização nativa pendente
 
-Confirmar no executável do Superman os construtores D3D e ligar os recursos
-identificados ao renderer Vulkan. O perfil do projeto PC em
+Confirmar no executável do Superman os construtores D3D. O perfil do projeto PC em
 `port/src/native_renderer/game_profile.h` ainda marca os candidatos de criação
 de shaders como não confirmados; eles não devem ser tratados como hooks prontos.
-Também faltam estados de draw, descriptors, constantes, texturas, tiling e resolve
-compatíveis com a interface emitida pelo tradutor, além dos shaders sem CTAB.
+A rota acima não usa esses hooks. Faltam ainda geometry shader próprio para
+retângulos/quads, gamma e formatos especiais de render target, sinais de textura,
+shaders sem CTAB e qualquer redução do custo de CPU do Xenos por draw.
 
 O teste visual e o boot completo continuam pendentes. A biblioteca offline não
 resolve a inicialização gráfica nem o tratamento de memória dos emuladores;

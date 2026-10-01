@@ -88,6 +88,12 @@ class VulkanTextureCache final : public TextureCache {
 
   VkImageView GetActiveBindingOrNullImageView(uint32_t fetch_constant_index,
                                               xenos::FetchOpDimension dimension, bool is_signed);
+  // For shaders translated offline (pack_shaders.h), which declare Texture2D rather than
+  // Texture2DArray: the view of the active binding as a non-arrayed 2D (layer 0), cube or
+  // 3D image, matching the binding's own dimension. VK_NULL_HANDLE if there's no valid
+  // binding of that dimension (no null view: the caller falls back instead).
+  VkImageView GetActiveBindingPackImageView(uint32_t fetch_constant_index,
+                                            xenos::FetchOpDimension dimension, bool is_signed);
 
   SamplerParameters GetSamplerParameters(const VulkanShader::SamplerBinding& binding) const;
 
