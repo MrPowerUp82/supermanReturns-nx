@@ -1,8 +1,8 @@
 # Continuação do renderer nativo: gameplay no Nintendo Switch
 
 Data: 2026-10-02.
-Estado: direção aprovada em conversa; especificação escrita aguardando revisão.
-Não há autorização de implementação decorrente apenas deste arquivo.
+Estado: direção e especificação escrita aprovadas pelo usuário em 2026-10-02;
+plano de implementação sujeito a revisão e escolha do método de execução.
 
 ## Objetivo e escopo aprovado
 
