@@ -1,8 +1,12 @@
+#include "sr_native_present.h"
 #include "sr_native_system.h"
 
 #include <atomic>
 #include <cassert>
+#include <algorithm>
 #include <chrono>
+#include <functional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -93,6 +97,161 @@ static void WorkerGroupTests() {
   assert(saw_cancel);
 }
 
+// --- Presentation sequence with fake acquisition/submission callbacks ----------------------
+
+struct FakeVulkan {
+  bool pass_ok = true, resources_ok = true, framebuffer_ok = true;
+  SubmitResult submit = SubmitResult::kOk;
+  bool cancelled = false;
+  unsigned pass_created = 0, resources_created = 0, framebuffers_created = 0, submits = 0, resets = 0;
+  unsigned pass_destroyed = 0, resources_destroyed = 0, framebuffers_destroyed = 0, reports = 0;
+  std::vector<std::string> order;
+  std::function<FenceWait()> wait = [] { return FenceWait::kComplete; };
+
+  ClearOps Ops() {
+    ClearOps ops;
+    ops.create_render_pass = [this] { ++pass_created; return pass_ok; };
+    ops.create_command_resources = [this] { ++resources_created; return resources_ok; };
+    ops.create_framebuffer = [this](uint64_t) { ++framebuffers_created; return framebuffer_ok; };
+    ops.record_and_submit = [this] { ++submits; order.push_back("submit"); return submit; };
+    ops.wait_fence = [this] { return wait(); };
+    ops.reset_for_reuse = [this] { ++resets; order.push_back("reset"); };
+    ops.destroy_framebuffers = [this] { ++framebuffers_destroyed; order.push_back("fb"); };
+    ops.destroy_command_resources = [this] { ++resources_destroyed; order.push_back("pool"); };
+    ops.destroy_render_pass = [this] { ++pass_destroyed; order.push_back("pass"); };
+    ops.cancelled = [this] { return cancelled; };
+    ops.report = [this](const char*) { ++reports; };
+    return ops;
+  }
+};
+
+static void SequencePresentsAndTearsDownInOrder() {
+  FakeVulkan vk;
+  ClearSequence sequence(vk.Ops());
+  assert(sequence.Clear(1) == ClearResult::kPresented);
+  assert(sequence.Clear(1) == ClearResult::kPresented);
+  assert(vk.pass_created == 1 && vk.resources_created == 1 && vk.submits == 2);
+  assert(!sequence.in_flight());
+  assert(vk.resets == 2);  // The fence and pool are reused only after completion.
+  assert(sequence.Teardown(4));
+  assert((vk.order.end()[-3] == "fb" && vk.order.end()[-2] == "pool" && vk.order.end()[-1] == "pass"));
+  assert(sequence.Teardown(4));  // Repeated shutdown destroys nothing twice.
+  assert(vk.pass_destroyed == 1 && vk.resources_destroyed == 1 && vk.framebuffers_destroyed == 1);
+}
+
+static void SequencePartialSetupTeardown() {
+  {  // Nothing was ever created.
+    FakeVulkan vk;
+    ClearSequence sequence(vk.Ops());
+    assert(sequence.Teardown(4));
+    assert(vk.pass_destroyed + vk.resources_destroyed + vk.framebuffers_destroyed == 0);
+  }
+  {  // Render pass created, pool creation failed.
+    FakeVulkan vk;
+    vk.resources_ok = false;
+    ClearSequence sequence(vk.Ops());
+    assert(sequence.Clear(1) == ClearResult::kFailed);
+    assert(vk.submits == 0);
+    assert(sequence.Teardown(4));
+    assert(vk.pass_destroyed == 1 && vk.resources_destroyed == 0 && vk.framebuffers_destroyed == 0);
+  }
+  {  // Pool created but the framebuffer is missing.
+    FakeVulkan vk;
+    vk.framebuffer_ok = false;
+    ClearSequence sequence(vk.Ops());
+    assert(sequence.Clear(1) == ClearResult::kFailed);
+    assert(vk.submits == 0);
+    assert(sequence.Teardown(4));
+    assert(vk.resources_destroyed == 1 && vk.pass_destroyed == 1 && vk.framebuffers_destroyed == 0);
+  }
+  {  // The render pass itself failed: nothing to destroy, nothing submitted.
+    FakeVulkan vk;
+    vk.pass_ok = false;
+    ClearSequence sequence(vk.Ops());
+    assert(sequence.Clear(1) == ClearResult::kFailed);
+    assert(sequence.Teardown(4));
+    assert(vk.pass_destroyed == 0 && vk.resources_created == 0);
+  }
+}
+
+static void SequenceFailedSubmissionIsNotPresented() {
+  FakeVulkan vk;
+  vk.submit = SubmitResult::kFailed;
+  ClearSequence sequence(vk.Ops());
+  assert(sequence.Clear(1) == ClearResult::kFailed);
+  assert(!sequence.in_flight());  // Nothing was submitted, so nothing is waited on.
+  assert(vk.resets == 0);
+  vk.submit = SubmitResult::kOk;
+  assert(sequence.Clear(1) == ClearResult::kPresented);  // A transient failure does not poison it.
+  vk.submit = SubmitResult::kDeviceLost;
+  assert(sequence.Clear(2) == ClearResult::kDeviceLost);
+  assert(sequence.device_lost());
+  assert(sequence.Clear(2) == ClearResult::kDeviceLost);  // Never retried on a lost device.
+  assert(vk.submits == 3);
+}
+
+static void SequenceTimeoutsAreDiagnosedAndCancellable() {
+  FakeVulkan vk;
+  size_t slices = 0;
+  vk.wait = [&] {
+    if (++slices == 3) vk.cancelled = true;
+    return FenceWait::kTimedOut;
+  };
+  ClearSequence sequence(vk.Ops());
+  assert(sequence.Clear(1) == ClearResult::kCancelled);
+  assert(vk.reports >= 1);       // A timeout is reported, not silent.
+  assert(sequence.in_flight());  // The submission may still be using the resources.
+  assert(vk.resets == 0);
+
+  // Shutdown cannot drain it: resources are retained instead of destroyed under the GPU.
+  assert(!sequence.Teardown(3));
+  assert(vk.pass_destroyed + vk.resources_destroyed + vk.framebuffers_destroyed == 0);
+  assert(sequence.in_flight());
+}
+
+static void SequenceDrainsAfterCancellation() {
+  FakeVulkan vk;
+  bool gpu_done = false;
+  vk.wait = [&] { return gpu_done ? FenceWait::kComplete : FenceWait::kTimedOut; };
+  ClearSequence sequence(vk.Ops());
+  vk.cancelled = true;
+  assert(sequence.Clear(1) == ClearResult::kCancelled);
+  assert(sequence.in_flight() && vk.submits == 1);
+  // A later request waits for the earlier submission before reusing anything.
+  vk.cancelled = false;
+  gpu_done = true;
+  assert(sequence.Clear(1) == ClearResult::kPresented);
+  assert(vk.submits == 2);
+  assert((vk.order[0] == "submit" && vk.order[1] == "reset" && vk.order[2] == "submit"));
+  assert(sequence.Teardown(2));
+  assert(vk.pass_destroyed == 1);
+
+  // Teardown after a cancelled submission completes once the GPU is done.
+  FakeVulkan vk2;
+  bool done2 = false;
+  vk2.wait = [&] { return done2 ? FenceWait::kComplete : FenceWait::kTimedOut; };
+  ClearSequence cancelled_sequence(vk2.Ops());
+  vk2.cancelled = true;
+  assert(cancelled_sequence.Clear(1) == ClearResult::kCancelled);
+  assert(!cancelled_sequence.Teardown(2));
+  done2 = true;
+  assert(cancelled_sequence.Teardown(2));
+  assert(vk2.pass_destroyed == 1 && vk2.resources_destroyed == 1 && vk2.framebuffers_destroyed == 1);
+  assert(!cancelled_sequence.in_flight());
+}
+
+static void SequenceWaitFailureKeepsResources() {
+  FakeVulkan vk;
+  vk.wait = [] { return FenceWait::kFailed; };
+  ClearSequence sequence(vk.Ops());
+  assert(sequence.Clear(1) == ClearResult::kFailed);
+  assert(sequence.in_flight());  // Completion is unknown: the resources may still be in use.
+  assert(vk.resets == 0);
+  vk.wait = [] { return FenceWait::kDeviceLost; };
+  assert(sequence.Teardown(2));  // A lost device no longer runs work.
+  assert(vk.pass_destroyed == 1);
+}
+
 static void ProgressTests() {
   const uint64_t before = NativeProgress();
   RecordNativeProgress();
@@ -107,5 +266,11 @@ int main() {
   WaitTimeoutTests();
   WorkerGroupTests();
   ProgressTests();
+  SequencePresentsAndTearsDownInOrder();
+  SequencePartialSetupTeardown();
+  SequenceFailedSubmissionIsNotPresented();
+  SequenceTimeoutsAreDiagnosedAndCancellable();
+  SequenceDrainsAfterCancellation();
+  SequenceWaitFailureKeepsResources();
   return 0;
 }

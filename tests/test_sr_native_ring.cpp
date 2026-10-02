@@ -446,6 +446,7 @@ static void ReplayTests() {
   assert(swap.ProcessNext(c) == PacketResult::kBlocked && swap.counters().refresh_completed == 0);
   present_ok = true;
   assert(swap.ProcessNext(c) == PacketResult::kConsumed && swap.counters().swap_requests == 1 && attempts == 3);
+  assert(swap.counters().refresh_completed == 1);  // Only the completed refresh is counted.
   // New ring generation must never inherit partial writes from an old packet.
   f.fail_write = true;
   auto old = Packet(PM4_MEM_WRITE, {0x100, 1}), replacement = old;
@@ -518,7 +519,17 @@ static void DefensiveTests() {
   f.stop = true; RingExecutor stopped(f.services());
   assert(Run(stopped, Packet(PM4_MEM_WRITE, {0x100, 1})) == PacketResult::kCancelled);
 }
+static void RefreshCounterTests() {
+  RingCounters counters;
+  RecordRefresh(false, counters);
+  assert(counters.refresh_completed == 0);
+  RecordRefresh(true, counters);
+  assert(counters.refresh_completed == 1);
+  RecordRefresh(false, counters);
+  assert(counters.refresh_completed == 1 && counters.swap_requests == 0);
+}
 int main() {
+  RefreshCounterTests();
   ParserTests(); WaitTests(); EffectTests(); BlockedAndMalformedTests(); PredicateTests(); IndirectTests();
   ShaderSafetyTests(); ReplayTests(); ReadOnlyAndCapacityTests();
   DefensiveTests();

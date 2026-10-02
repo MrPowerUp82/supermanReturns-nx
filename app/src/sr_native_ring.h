@@ -59,6 +59,9 @@ struct RingCounters {
   uint32_t last_blocked_opcode = 0, last_blocked_address = 0;
   uint64_t draws_shader_blocked = 0;
 };
+// A refresh that failed or was refused is not counted: refresh_completed is a submitted-and-
+// finished clear/refresh, not frames shown (surface paints are counted by the presenter).
+void RecordRefresh(bool ok, RingCounters&);
 class RingExecutor {
  public:
   explicit RingExecutor(Services services);

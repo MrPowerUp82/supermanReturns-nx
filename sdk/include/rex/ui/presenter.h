@@ -390,6 +390,16 @@ class Presenter {
   // Requests (re)painting with the UI if there's UI to draw.
   void RequestUIPaintFromUIThread();
 
+  // Native renderer opt-in (default false, which leaves the Xenos behaviour unchanged): painting
+  // stays on the UI thread, so the thread that refreshes the guest output only requests a paint
+  // and never blocks on the host surface. Call before the presenter is attached to a window.
+  void SetPaintFromUIThreadOnly(bool enabled) {
+    paint_from_ui_thread_only_.store(enabled, std::memory_order_release);
+  }
+  // Successful surface paints (kPresented or kPresentedSuboptimal), counting repeated paints
+  // of the same image and UI-only paints. This is not the guest frame rate.
+  uint64_t surface_paints() const { return surface_paints_.load(std::memory_order_acquire); }
+
  protected:
   /*
    * Stops and joins the presenter's own thread (present_hilo_propio).
@@ -974,6 +984,8 @@ class Presenter {
    * The only thing the fast path must not do is touch `window_`, and it does not.
    */
   std::atomic<PaintMode> paint_mode_fast_{PaintMode::kNone};
+  std::atomic<bool> paint_from_ui_thread_only_{false};
+  std::atomic<uint64_t> surface_paints_{0};
 
   // These fields can be accessed _exclusively_ by either the UI thread or the
   // guest output thread, depending on paint_mode_.

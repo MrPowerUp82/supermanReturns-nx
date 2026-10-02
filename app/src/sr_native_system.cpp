@@ -4,6 +4,7 @@
 
 #include "sr_native_system.h"
 
+#include "sr_native_present.h"
 #include "sr_native_ring.h"
 #include "sr_native_shader_safety.h"
 
@@ -23,7 +24,6 @@
 #include <rex/system/xvideo.h>
 #include <rex/thread.h>
 #include <rex/ui/presenter.h>
-#include <rex/ui/vulkan/provider.h>
 #include <rex/ui/windowed_app_context.h>
 
 #include <algorithm>
@@ -147,39 +147,31 @@ MmioBridge& Bridge() {
   return *bridge;
 }
 
+class NativeSystem;
+std::atomic<NativeSystem*> g_active_system{nullptr};
+
 class NativeSystem final : public rex::system::IGraphicsSystem {
  public:
   explicit NativeSystem(bool configuration_valid)
       : configuration_valid_(configuration_valid), registers_(new std::atomic<uint32_t>[kRegisterCount]) {
     for (uint32_t i = 0; i < kRegisterCount; ++i) registers_[i].store(0, std::memory_order_relaxed);
+    g_active_system.store(this, std::memory_order_release);
   }
-  ~NativeSystem() override { Shutdown(); }
+  ~NativeSystem() override {
+    Shutdown();
+    NativeSystem* expected = this;
+    g_active_system.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+  }
 
   X_STATUS SetupPresentation(rex::ui::WindowedAppContext* app_context) override {
     if (!configuration_valid_) {
       REXLOG_ERROR("[sr-native] invalid renderer configuration; native setup refused");
       return X_STATUS_UNSUCCESSFUL;
     }
-    if (presenter_) return X_STATUS_SUCCESS;
-    app_context_ = app_context;
-    if (!provider_) {
-      provider_ = rex::ui::vulkan::VulkanProvider::Create(true, true);
-      if (!provider_) {
-        REXLOG_ERROR("[sr-native] unable to create the Vulkan device");
-        return X_STATUS_UNSUCCESSFUL;
-      }
-    }
-    auto create = [this]() { presenter_ = provider_->CreatePresenter(); };
-    if (app_context_) {
-      app_context_->CallInUIThreadSynchronous(create);
-    } else {
-      create();
-    }
-    if (!presenter_) {
-      REXLOG_ERROR("[sr-native] unable to create the presenter");
-      provider_.reset();
-      return X_STATUS_UNSUCCESSFUL;
-    }
+    if (presentation_) return X_STATUS_SUCCESS;
+    auto presentation = std::make_unique<NativePresentation>([this]() { return stop_.cancelled(); });
+    if (!presentation->Initialize(app_context)) return X_STATUS_UNSUCCESSFUL;
+    presentation_ = std::move(presentation);
     REXLOG_INFO("[sr-native] SDK provider and presenter created; no Xenos emulation");
     return X_STATUS_SUCCESS;
   }
@@ -209,9 +201,13 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     return X_STATUS_SUCCESS;
   }
 
-  bool has_presentation() const override { return presenter_ != nullptr; }
-  rex::ui::GraphicsProvider* provider() const override { return provider_.get(); }
-  rex::ui::Presenter* presenter() const override { return presenter_.get(); }
+  bool has_presentation() const override { return presentation_ && presentation_->presenter(); }
+  rex::ui::GraphicsProvider* provider() const override {
+    return presentation_ ? presentation_->provider() : nullptr;
+  }
+  rex::ui::Presenter* presenter() const override {
+    return presentation_ ? presentation_->presenter() : nullptr;
+  }
 
   void SetInterruptCallback(uint32_t callback, uint32_t user_data) override {
     callback_data_.store(user_data, std::memory_order_release);
@@ -256,10 +252,11 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     writeback_.store(physical, std::memory_order_release);
   }
 
-  // Idempotent. Order: stop callbacks reaching us, stop and join workers (no lock held),
-  // then release the presenter on the UI thread and the provider.
-  void Shutdown() override {
-    if (shutdown_started_.exchange(true)) return;
+  // Stops callbacks reaching us, then stops and joins the workers (no lock held while
+  // joining). The presentation objects stay alive: the app caches pointers to the presenter
+  // until the SDK's own exit. Idempotent; this is what the app's close path calls.
+  void QuiesceWorkers() {
+    if (quiesce_started_.exchange(true)) return;
     DisableMmio();
     if (workers_) {
       stop_.Stop();
@@ -269,13 +266,13 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       workers_.reset();
     }
     if (workers_started_ || ring_generation_) ReportSummary("final");
-    if (presenter_) {
-      if (app_context_) {
-        app_context_->CallInUIThreadSynchronous([this]() { presenter_.reset(); });
-      }
-      presenter_.reset();
-    }
-    provider_.reset();
+  }
+
+  // Idempotent. Workers first, then the presentation (clear resources, presenter on the UI
+  // thread, provider). A presentation whose GPU work cannot be drained is retained, not freed.
+  void Shutdown() override {
+    QuiesceWorkers();
+    presentation_.reset();
   }
 
  private:
@@ -479,13 +476,16 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     return true;
   }
 
-  // Native presentation arrives with the Vulkan clear path. Until then a swap neither
-  // completes nor is faked: it blocks and says so.
-  bool Present(uint32_t, uint32_t, uint32_t) {
-    if (!present_blocked_logged_.exchange(true)) {
-      REXLOG_WARN("[sr-native] BLOCKED: swap received but native presentation is not available");
+  // A swap completes only when the clear reached the GPU and finished. No presentation or a
+  // failed clear blocks the swap (with a diagnostic); nothing is faked.
+  bool Present(uint32_t, uint32_t width, uint32_t height) {
+    if (!presentation_) {
+      if (!present_blocked_logged_.exchange(true)) {
+        REXLOG_WARN("[sr-native] BLOCKED: swap received but no native presentation exists");
+      }
+      return false;
     }
-    return false;
+    return presentation_->PresentClear(width, height);
   }
 
   // --- Workers ------------------------------------------------------------------------
@@ -630,19 +630,18 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     const RingCounters& c = last_counters_;
     REXLOG_INFO(
         "[sr-native] summary kind={} packets={} indirects={} swaps={} refreshes={} draws_omitted={} "
-        "blocked={} invalid={} interrupts={} vblanks={} wptr_writes={} progress={}{}",
+        "blocked={} invalid={} interrupts={} vblanks={} wptr_writes={} progress={} surface_paints={}{}",
         kind, c.packets, c.indirects, c.swap_requests, c.refresh_completed, c.draws_omitted, c.blocked,
         c.invalid, c.interrupts, vblanks_.load(std::memory_order_relaxed),
         mmio_wptr_writes_.load(std::memory_order_relaxed), NativeProgress(),
+        presentation_ ? presentation_->surface_paints() : 0,
         std::string_view(kind) == "final" ? " shutdown=complete" : "");
   }
 
   // --- State ---------------------------------------------------------------------------------
 
   const bool configuration_valid_;
-  rex::ui::WindowedAppContext* app_context_ = nullptr;
-  std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider_;
-  std::unique_ptr<rex::ui::Presenter> presenter_;
+  std::unique_ptr<NativePresentation> presentation_;
   rex::runtime::FunctionDispatcher* dispatcher_ = nullptr;
   rex::system::KernelState* kernel_state_ = nullptr;
   rex::memory::Memory* memory_ = nullptr;
@@ -653,7 +652,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   std::unique_ptr<WorkerGroup> workers_;
   bool workers_started_ = false;
   bool mmio_enabled_ = false;
-  std::atomic<bool> shutdown_started_{false};
+  std::atomic<bool> quiesce_started_{false};
   std::atomic<bool> failed_{false};
 
   std::unique_ptr<std::atomic<uint32_t>[]> registers_;
@@ -683,6 +682,13 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
 
 std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem(bool configuration_valid) {
   return std::make_unique<NativeSystem>(configuration_valid);
+}
+
+bool QuiesceNativeGraphicsSystem(rex::system::IGraphicsSystem* system) {
+  NativeSystem* active = g_active_system.load(std::memory_order_acquire);
+  if (!system || !active || static_cast<rex::system::IGraphicsSystem*>(active) != system) return false;
+  active->QuiesceWorkers();
+  return true;
 }
 
 }  // namespace sr::native

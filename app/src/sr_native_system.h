@@ -102,4 +102,10 @@ inline void RecordNativeProgress() { NativeProgressCounter().fetch_add(1, std::m
 // With configuration_valid=false the system's setup fails before any resource is made.
 std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem(bool configuration_valid = true);
 
+// Worker-only shutdown for the app's close path, which hard-exits after the SDK terminates the
+// title: stops callbacks, cancels waits and joins the ring and vblank workers. The presenter and
+// provider stay alive (the app caches pointers to them). Returns false if `system` is not the
+// native system. Idempotent.
+bool QuiesceNativeGraphicsSystem(rex::system::IGraphicsSystem* system);
+
 }  // namespace sr::native

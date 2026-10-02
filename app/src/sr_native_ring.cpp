@@ -184,6 +184,10 @@ bool MemoryExtent(uint32_t address, size_t words) {
 }
 }  // namespace
 
+void RecordRefresh(bool ok, RingCounters& counters) {
+  if (ok) ++counters.refresh_completed;
+}
+
 PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
   using enum PacketResult;
   const auto& p = packet.payload;
@@ -221,7 +225,11 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
     case PM4_XE_SWAP:
       if (p.size() < 4 || p[0] != kSwapSignature) return kInvalid;
       if (!executing_->prepared) { ++counters_.swap_requests; executing_->prepared = true; }
-      if (!services_.present || !services_.present(p[1], p[2], p[3])) return kBlocked;
+      {
+        const bool refreshed = services_.present && services_.present(p[1], p[2], p[3]);
+        RecordRefresh(refreshed, counters_);
+        if (!refreshed) return kBlocked;
+      }
       return kConsumed;
     case PM4_INDIRECT_BUFFER: case PM4_INDIRECT_BUFFER_PFD: {
       if (p.size() < 2 || p[0] & 3 || p[1] & ~0xfffffu || depth >= 4 ||
