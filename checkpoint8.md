@@ -46,7 +46,8 @@ no NRO has run on the Switch. Nothing below claims correct video, gameplay or an
 
 - **GCC ASan is unreliable in this Docker**: even an empty program hangs intermittently (DEADLYSIGNAL). Each
   native test binary passed ASan+UBSan at least once; no stable ASan run exists. TSan does not start here.
-- **No independent review** of Tasks 3-5 (earlier tasks had real findings from reviews). Recommended next.
+- Independent review of Tasks 3-5 done (two fresh-context reviewers); see the section below. The fixes were
+  host-tested but not re-reviewed.
 - **SDK changes to review**: `presenter.h/.cpp` (opt-in paint mode, `surface_paints`), `rex_app.h/.cpp`
   (`OnWindowClosing`), and `guest_memory_switch.cpp` differed in the build volume from the worktree (pre-existing
   on `main`, unrelated).
@@ -90,3 +91,33 @@ no NRO has run on the Switch. Nothing below claims correct video, gameplay or an
 3. After a clean console round, record opcodes/waits/omitted draws here and mark the milestone; otherwise fix the
    first blocker in the task that owns it and repeat only the affected round.
 4. Push or merge the branch so this work is not stranded on one machine again.
+
+## Independent review of Tasks 3-5 (2026-10-02) and what changed
+
+Two reviewers with no prior context read the code; no Critical findings. Fixed in `8bc09c1`:
+
+| Finding | Fix |
+|---|---|
+| Shader proof could be fooled by fall-through into unchecked data | control flow must end in an unconditional `exece`; test with the reviewer's counterexample |
+| Empty tail `exece` pointing at the program end would reject real shaders | empty exec accepted (address unused) |
+| Rejected shader reason invisible | `SHADER rejected ... reason=... first_words=...`, once per shader, max 16 |
+| Ring worker busy-spun after any failure | idles with a 10 ms wait |
+| Close path could hang joining a worker inside a guest ISR | 5 s bounded join per worker, `shutdown=incomplete`, nothing freed; concurrent quiesce serialized |
+| Failed record/submit left the command buffer unusable | pool reset before every record; every `VkResult` logged, per-message rate limit |
+| New read-pointer write-back address ignored while idle | address change forces a write |
+| vblank catch-up spin with a huge refresh rate; weak MMIO handshake ordering | 1 ms floor; seq_cst |
+| `native-report.py` could pass appended/crashed runs, missing header, MMIO failures, fence stalls | judges only the last run, requires the header, new failure/blocked rules, `--expect-build` |
+
+Not changed (judgment calls): `PM4_INTERRUPT` with no installed callback stays pending (the SDK drops it);
+addresses above 0x1FFFFFFF are rejected rather than masked (fails safe); ring memory is re-validated each
+batch (cost unmeasured); strict reserved-bit masks may reject real shaders, which the new log line will show;
+the fall-through test and masks were verified only against synthetic encodings, never a real shader dump.
+
+Current artifacts (supersede the ones above): revision `8bc09c177e43`,
+`out/console/builds/native-boot-test-8bc09c1/superman_returns-native-boot-test.nro` — 60,057,797 bytes, SHA-256
+`ec3fc0fb97e036cff47f9995fc7a11b244c2750bcb75fab03780ba50fdd30183`; ELF
+`out/console/symbols/superman_returns-native-boot-test-8bc09c177e43.elf` — 80,470,392 bytes, SHA-256
+`8e8234c5ad41d00539e410153b8ffb288c13176e66aa86e68f68742be5e14f20`. Host tests, UBSan, Python suite (Linux)
+and the incremental NRO build pass again. A Sudachi run of the earlier build (`fca37bd`) only reached
+SDK provider/presenter creation, same stall point as the Xenos run: that emulator does not deliver the data
+aborts the MMIO range needs, so it says nothing about PM4 or the clear.
