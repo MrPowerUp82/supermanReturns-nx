@@ -1465,7 +1465,8 @@ Presenter::PaintMode Presenter::GetDesiredPaintModeFromUIThread(bool is_paintabl
     // lifecycle.
     return PaintMode::kNone;
   }
-  if (!REXCVAR_GET(host_present_from_non_ui_thread)) {
+  if (!REXCVAR_GET(host_present_from_non_ui_thread) ||
+      paint_from_ui_thread_only_.load(std::memory_order_acquire)) {
     return PaintMode::kUIThreadOnRequest;
   }
   if (surface_paint_connection_has_implicit_vsync_ &&
@@ -1656,9 +1657,11 @@ Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
   switch (result) {
     case PaintResult::kPresented:
+      surface_paints_.fetch_add(1, std::memory_order_acq_rel);
       surface_paint_connection_was_optimal_at_successful_paint_ = true;
       break;
     case PaintResult::kPresentedSuboptimal:
+      surface_paints_.fetch_add(1, std::memory_order_acq_rel);
       // Make outdated if previously optimal, now suboptimal, but don't cause
       // the connection to become outdated if it has been suboptimal from the
       // very beginning.

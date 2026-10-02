@@ -9,3 +9,7 @@ if [[ "${SANITIZE:-0}" == 1 ]]; then
 fi
 "${CXX:-c++}" "${flags[@]}" tests/test_sr_native_ring.cpp app/src/sr_native_ring.cpp -o "$build_dir/test_sr_native_ring"
 "$build_dir/test_sr_native_ring"
+"${CXX:-c++}" "${flags[@]}" tests/test_sr_native_lifecycle.cpp -o "$build_dir/test_sr_native_lifecycle"
+"$build_dir/test_sr_native_lifecycle"
+"${CXX:-c++}" "${flags[@]}" tests/test_sr_native_shader_safety.cpp app/src/sr_native_shader_safety.cpp -o "$build_dir/test_sr_native_shader_safety"
+"$build_dir/test_sr_native_shader_safety"

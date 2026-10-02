@@ -5,7 +5,15 @@
 #include <rex/logging.h>
 #include <rex/rex_app.h>
 #include <cstdlib>
+#include <string>
+#include "sr_native_system.h"
+#include "sr_settings.h"
 #include "sr_shader_registry.h"
+// Source revision of this build (CMake: SR_BUILD_REVISION env var or git). It identifies the
+// source, not the NRO bytes: an artifact hash cannot be embedded in the artifact itself.
+#ifndef SR_BUILD_REVISION
+#define SR_BUILD_REVISION "unknown"
+#endif
 #if REX_PLATFORM_SWITCH
 #include <switch.h>
 extern "C" void SrTouchEmulatorTlsGuard();
@@ -34,6 +42,22 @@ class SupermanReturnsApp : public rex::ReXApp {
       paths.cache_root = paths.user_data_root / "cache";
     paths.config_path = folder / "superman_returns.toml";
   }
+
+  // The renderer is chosen once per run: no switching at runtime and no per-draw fallback.
+  // An invalid value makes native setup fail (the SDK treats a failed presentation setup as
+  // fatal) instead of silently running Xenos.
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    const std::string mode = rex::cvar::GetFlagByName("sr_renderer");
+    REXLOG_INFO("[sr-native] sr_renderer={} milestone=1 build={}", mode, SR_BUILD_REVISION);
+    if (mode == "xenos") return;
+    const bool valid = mode == "native";
+    if (!valid) REXLOG_ERROR("Invalid sr_renderer: {}", mode);
+    config.graphics = sr::native::CreateGraphicsSystem(valid);
+  }
+
+  // The SDK hard-exits after TerminateTitle without running destructors, so the native
+  // workers are stopped and joined first (OnClosing calls this hook). No effect with Xenos.
+  void OnWindowClosing() override { QuiesceNative(); }
 
   void OnPostInitLogging() override {
     SetDefault("gpu_plugin", "xenos");
@@ -76,6 +100,9 @@ class SupermanReturnsApp : public rex::ReXApp {
   }
 
  private:
+  void QuiesceNative() {
+    if (runtime()) sr::native::QuiesceNativeGraphicsSystem(runtime()->graphics_system());
+  }
   static void SetDefault(const char* name, const char* value) {
     if (rex::cvar::GetFlagInfo(name) &&
         rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault)

@@ -19,7 +19,20 @@ endif()
 include(cmake/rexglue.cmake)
 
 set(SR_SOURCES src/main.cpp src/sr_settings.cpp src/xma_fixes.cpp src/skip_intro.cpp
-    src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp)
+    src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp
+    src/sr_native_ring.cpp src/sr_native_shader_safety.cpp src/sr_native_present.cpp
+    src/sr_native_system.cpp)
+set(SR_BUILD_REVISION "$ENV{SR_BUILD_REVISION}")
+if(NOT SR_BUILD_REVISION)
+    execute_process(COMMAND git rev-parse --short=12 HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE SR_BUILD_REVISION
+        ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+endif()
+if(NOT SR_BUILD_REVISION)
+    set(SR_BUILD_REVISION "unknown")
+endif()
+set_source_files_properties(src/main.cpp PROPERTIES
+    COMPILE_DEFINITIONS "SR_BUILD_REVISION=\"${SR_BUILD_REVISION}\"")
 if(WIN32)
     add_executable(superman_returns WIN32 ${SR_SOURCES})
 else()
