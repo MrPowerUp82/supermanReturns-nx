@@ -53,6 +53,10 @@ quantities and must not be read as frame rate.
 | `vblanks` | Timer-driven vblank interrupts (source 0). |
 
 `shutdown=complete` appears on the final line only after the ring and vblank workers were joined.
+Each worker gets 5 s to exit; if one does not, the line is `summary kind=final shutdown=incomplete`,
+the presenter and provider are not freed, and the report tool fails the run.
+`SHADER rejected stage=... reason=... first_words=...` is logged once per distinct rejected shader
+(at most 16), so the first blocked draw says why the proof failed.
 
 ## Behavior that is deliberately blocked
 
@@ -60,6 +64,10 @@ quantities and must not be read as frame rate.
 - Draws are omitted only when `ShaderIsMemorySafe` proves the loaded shaders cannot memexport.
   Anything the scan does not fully understand (reserved bits, unknown fetch opcodes, jumps
   outside the control-flow section, memory-export allocation) is unsafe and blocks the draw.
+- The shader proof also requires the control flow to end in an unconditional `exece`, so execution
+  cannot fall off the scanned section into unchecked instruction data.
+- A `PM4_INTERRUPT` with no interrupt callback installed stays pending (the SDK drops it silently);
+  it completes as soon as the guest installs the callback.
 - `COHER_STATUS_HOST` dirty, resolves with memory payloads, unknown queries and similar effects
   are never completed by guessing.
 
@@ -98,7 +106,8 @@ thing changes per round (`sr_renderer`); the previous NROs and configuration are
 4. **Round.** The user opens the NRO. Round A: `sr_renderer = "xenos"` (baseline). Round B:
    `sr_renderer = "native"`. The user reports audio, boot progress and how the exit went.
 5. **Collect** the log and the TOML into a new local folder named by date, build and mode, and run
-   `python tools/switch/native-report.py <log>`. If the run is blocked, ask for an exit and
+   `python tools/switch/native-report.py --expect-build <revision> <log>` (only the last run in an
+   appended log is judged). If the run is blocked, ask for an exit and
    download the log; do not change synchronization to make it look like progress. Restore only the
    key that was changed, and only if that keeps later edits by the user.
 

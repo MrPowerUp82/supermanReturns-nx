@@ -73,27 +73,28 @@ bool FetchOpcodeKnown(FetchOpcode opcode) {
   return false;
 }
 
-bool ClauseSafe(uint32_t stage, std::span<const uint32_t> code, const Clause& clause) {
+// Returns nullptr when the clause is safe, otherwise a static reason.
+const char* ClauseUnsafe(uint32_t stage, std::span<const uint32_t> code, const Clause& clause) {
   const uint32_t total = uint32_t(code.size() / 3);
-  if (clause.count > kMaxExecCount || clause.address + clause.count > total) return false;
+  if (clause.count > kMaxExecCount) return "exec clause count above 6";
+  if (clause.address + clause.count > total) return "exec clause beyond the code";
   for (uint32_t i = 0; i < clause.count; ++i) {
     const uint32_t* words = code.data() + size_t(clause.address + i) * 3;
     if ((clause.sequence >> (2 * i)) & 1) {
       FetchInstruction fetch;
       std::memcpy(static_cast<void*>(&fetch), words, sizeof(fetch));
-      if (!FetchOpcodeKnown(fetch.opcode())) return false;
+      if (!FetchOpcodeKnown(fetch.opcode())) return "unknown fetch opcode";
     } else {
       AluInstruction alu;
       std::memcpy(static_cast<void*>(&alu), words, sizeof(alu));
       if (!alu.is_export()) continue;
       // Exports go to the vector destination, which cannot be relative: anything else
       // (eA/eM0-4 memory export, or a destination of the other stage) is not provable.
-      if (alu.is_vector_dest_relative() || !ExportDestinationAllowed(stage, alu.vector_dest())) {
-        return false;
-      }
+      if (alu.is_vector_dest_relative()) return "relative export destination";
+      if (!ExportDestinationAllowed(stage, alu.vector_dest())) return "export destination is not a register of this stage (memory export)";
     }
   }
-  return true;
+  return nullptr;
 }
 
 uint64_t Hash(uint32_t stage, std::span<const uint32_t> code) {
@@ -103,33 +104,52 @@ uint64_t Hash(uint32_t stage, std::span<const uint32_t> code) {
 }
 }  // namespace
 
-bool ShaderIsMemorySafe(uint32_t stage, std::span<const uint32_t> code) {
-  if (stage > 1) return false;
+bool ShaderIsMemorySafe(uint32_t stage, std::span<const uint32_t> code, const char** reason) {
+  auto unsafe = [reason](const char* why) {
+    if (reason) *reason = why;
+    return false;
+  };
+  if (reason) *reason = nullptr;
+  if (stage > 1) return unsafe("unknown shader stage");
   const uint32_t total = uint32_t(code.size() / 3);
-  if (!total || total > kMaxInstructions) return false;
+  if (!total) return unsafe("shader smaller than one instruction");
+  if (total > kMaxInstructions) return unsafe("shader larger than 4096 instructions");
 
   // Control flow comes first and ends where the first exec clause's instructions begin.
   // Scanning every control-flow slot (not following jumps) covers any path execution takes.
   uint32_t first_instruction = total;
   std::vector<Clause> clauses;
   std::vector<uint32_t> targets;
+  bool saw_slot = false;
+  ControlFlowOpcode last_opcode = ControlFlowOpcode::kNop;  // Last non-nop slot.
   for (uint32_t pair = 0; pair < first_instruction; ++pair) {
     ControlFlowInstruction cf[2];
     UnpackControlFlowInstructions(code.data() + size_t(pair) * 3, cf);
     for (const auto& instruction : cf) {
       const ControlFlowOpcode opcode = instruction.opcode();
       Reserved reserved;
-      if (!ReservedFor(opcode, reserved)) return false;
-      if ((instruction.dword_0 & reserved.d0) || (instruction.dword_1 & reserved.d1)) return false;
+      if (!ReservedFor(opcode, reserved)) return unsafe("unknown control-flow opcode");
+      if ((instruction.dword_0 & reserved.d0) || (instruction.dword_1 & reserved.d1)) {
+        return unsafe("reserved control-flow bits set");
+      }
+      if (opcode != ControlFlowOpcode::kNop) {
+        saw_slot = true;
+        last_opcode = opcode;
+      }
       if (opcode == ControlFlowOpcode::kAlloc && instruction.alloc.alloc_type() == AllocType::kMemory) {
-        return false;
+        return unsafe("memory export allocation");
       }
       if (IsControlFlowOpcodeExec(opcode)) {
         // Exec, cond-exec and predicated forms share the first dword layout.
         const uint32_t address = instruction.exec.address();
-        if (address <= pair || address >= total) return false;
-        first_instruction = std::min(first_instruction, address);
-        clauses.push_back({address, instruction.exec.count(), instruction.exec.sequence()});
+        const uint32_t count = instruction.exec.count();
+        // An empty exec (the compiler's tail `exece`) runs nothing: its address is not used.
+        if (count) {
+          if (address <= pair) return unsafe("instruction data overlaps control flow");
+          if (address >= total) return unsafe("exec clause beyond the code");
+          first_instruction = std::min(first_instruction, address);
+          clauses.push_back({address, count, instruction.exec.sequence()});
+        }
       } else if (opcode == ControlFlowOpcode::kLoopStart) {
         targets.push_back(instruction.loop_start.address());
       } else if (opcode == ControlFlowOpcode::kLoopEnd) {
@@ -141,35 +161,44 @@ bool ShaderIsMemorySafe(uint32_t stage, std::span<const uint32_t> code) {
       }
     }
   }
+  // The program must end inside the scanned section: otherwise execution could fall off the
+  // last control-flow slot into instruction data that no exec clause references (unchecked).
+  if (!saw_slot || last_opcode != ControlFlowOpcode::kExecEnd) {
+    return unsafe("control flow does not end with an unconditional exec end");
+  }
   const uint32_t control_flow_slots = first_instruction * 2;
   for (uint32_t target : targets) {
-    if (target >= control_flow_slots) return false;  // Would execute instruction data as control flow.
+    if (target >= control_flow_slots) return unsafe("branch target outside control flow");
   }
   for (const Clause& clause : clauses) {
-    if (!ClauseSafe(stage, code, clause)) return false;
+    if (const char* why = ClauseUnsafe(stage, code, clause)) return unsafe(why);
   }
   return true;
 }
 
-bool ShaderSafetyCache::IsSafe(uint32_t stage, std::span<const uint32_t> code) {
+bool ShaderSafetyCache::IsSafe(uint32_t stage, std::span<const uint32_t> code, Verdict* verdict) {
   const uint64_t hash = Hash(stage, code);
   std::lock_guard<std::mutex> lock(mutex_);
   auto& bucket = entries_[hash];
   for (const Entry& entry : bucket) {
     if (entry.stage == stage && entry.code.size() == code.size() &&
         std::equal(code.begin(), code.end(), entry.code.begin())) {
+      if (verdict) *verdict = {entry.reason, false};
       return entry.safe;
     }
   }
-  const bool safe = ShaderIsMemorySafe(stage, code);
+  const char* reason = nullptr;
+  const bool safe = ShaderIsMemorySafe(stage, code, &reason);
+  Entry entry{stage, std::vector<uint32_t>(code.begin(), code.end()), safe, reason};
   if (count_ >= kMaxCacheEntries) {
     entries_.clear();
     count_ = 0;
-    entries_[hash].push_back({stage, std::vector<uint32_t>(code.begin(), code.end()), safe});
+    entries_[hash].push_back(std::move(entry));
   } else {
-    bucket.push_back({stage, std::vector<uint32_t>(code.begin(), code.end()), safe});
+    bucket.push_back(std::move(entry));
   }
   ++count_;
+  if (verdict) *verdict = {reason, true};
   return safe;
 }
 

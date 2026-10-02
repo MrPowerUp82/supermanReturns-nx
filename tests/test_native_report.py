@@ -106,6 +106,65 @@ class ParseReportTests(unittest.TestCase):
         self.assertEqual(parse_report(log)['status'], 'blocked')
 
 
+class ReviewRegressionTests(unittest.TestCase):
+    def test_only_the_last_run_in_an_appended_log_counts(self):
+        crashed = (f'{PREFIX}[sr-native] sr_renderer=native milestone=1 build=aaa\n'
+                   + summary(packets=500, progress=900) + summary(packets=800, progress=1500))
+        # A clean earlier run must not vouch for a later run that never shut down.
+        self.assertEqual(parse_report(clean_log() + crashed)['status'], 'failed')
+        # And a failed earlier run must not condemn a clean later run.
+        self.assertEqual(parse_report(crashed + clean_log())['status'], 'needs_console_review')
+
+    def test_progress_restart_in_a_new_process_is_not_a_stall(self):
+        first = clean_log()
+        second = clean_log().replace('progress=900', 'progress=10').replace('progress=2000', 'progress=20') \
+                            .replace('progress=2200', 'progress=30')
+        self.assertEqual(parse_report(first + second)['status'], 'needs_console_review')
+
+    def test_log_without_renderer_header_is_not_reviewable(self):
+        report = parse_report(summary() + summary(kind='final', packets=2000, progress=4000, final=True))
+        self.assertEqual(report['status'], 'failed')
+        self.assertIn('no_mode', report['reasons'])
+
+    def test_more_failure_lines(self):
+        for line in ('[sr-native] unable to register the GPU MMIO range',
+                     '[sr-native] the GPU MMIO range belongs to another guest memory',
+                     '[sr-native] summary kind=final shutdown=incomplete (a worker did not exit in 5000 ms)'):
+            with self.subTest(line=line):
+                self.assertEqual(parse_report(clean_log() + PREFIX + line + '\n')['status'], 'failed')
+
+    def test_fence_timeouts_block(self):
+        report = parse_report(clean_log() + f'{PREFIX}[sr-native] present: fence wait timed out\n')
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIn('present_stall', report['reasons'])
+
+    def test_swaps_that_never_refreshed_block(self):
+        log = (f'{PREFIX}[sr-native] sr_renderer=native milestone=1 build=x\n'
+               + summary(swaps=50, refreshes=0, packets=500, progress=900)
+               + summary(kind='final', swaps=100, refreshes=0, packets=1000, progress=2000, final=True))
+        report = parse_report(log)
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIn('swaps_not_presented', report['reasons'])
+        # One swap in flight at shutdown is normal.
+        log = log.replace('swaps=100 refreshes=0', 'swaps=100 refreshes=99')
+        self.assertEqual(parse_report(log)['status'], 'needs_console_review')
+
+    def test_shader_rejections_are_reported_and_block(self):
+        line = (f'{PREFIX}[sr-native] SHADER rejected stage=0 words=30 reason=memory export allocation '
+                'first_words=00000001 00000002 00000003 00000004 00000005 00000006\n')
+        report = parse_report(clean_log() + line)
+        self.assertEqual(len(report['shader_rejects']), 1)
+        self.assertEqual(report['shader_rejects'][0]['reason'], 'memory export allocation')
+        self.assertEqual(report['status'], 'blocked')
+
+    def test_expected_build_mismatch_fails(self):
+        self.assertEqual(parse_report(clean_log(), expect_build='fca37bd8c980')['status'],
+                         'needs_console_review')
+        report = parse_report(clean_log(), expect_build='deadbeef0000')
+        self.assertEqual(report['status'], 'failed')
+        self.assertIn('build_mismatch', report['reasons'])
+
+
 class CommandLineTests(unittest.TestCase):
     def test_cli_prints_json_and_does_not_touch_the_log(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -61,6 +61,8 @@ constexpr uint32_t kRegD1ModeVblankVlineStatus = 0x1951;
 constexpr uint32_t kRegD1ModeViewportSize = 0x1961;
 constexpr auto kReportInterval = std::chrono::seconds(10);
 constexpr auto kRepeatInterval = std::chrono::seconds(5);
+constexpr int64_t kJoinTimeoutMs = 5000;  // Per worker; shutdown then reports shutdown=incomplete.
+constexpr uint32_t kMaxShaderRejectLogs = 16;
 
 // --- Physical memory access ----------------------------------------------------------
 //
@@ -182,6 +184,10 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     if (!configuration_valid_) return X_STATUS_UNSUCCESSFUL;
     if (!dispatcher || !kernel_state || !dispatcher->memory()) return X_STATUS_UNSUCCESSFUL;
     if (workers_started_) return X_STATUS_SUCCESS;
+    {
+      std::lock_guard<std::mutex> lock(quiesce_mutex_);
+      if (quiesced_) return X_STATUS_UNSUCCESSFUL;  // Workers cannot be restarted after shutdown.
+    }
     dispatcher_ = dispatcher;
     kernel_state_ = kernel_state;
     memory_ = dispatcher->memory();
@@ -195,7 +201,8 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     workers_.reset(new WorkerGroup(&stop_));
     if (!StartWorker("sr-native vblank", [this]() { return VblankLoop(); }) ||
         !StartWorker("sr-native ring", [this]() { return RingLoop(); })) {
-      Shutdown();
+      // The presenter stays: the app caches its pointer until the SDK's own exit.
+      QuiesceWorkers();
       return X_STATUS_UNSUCCESSFUL;
     }
     workers_started_ = true;
@@ -254,26 +261,46 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   }
 
   // Stops callbacks reaching us, then stops and joins the workers (no lock held while
-  // joining). The presentation objects stay alive: the app caches pointers to the presenter
-  // until the SDK's own exit. Idempotent; this is what the app's close path calls.
+  // joining), each for at most kJoinTimeoutMs. The presentation objects stay alive: the app
+  // caches pointers to the presenter until the SDK's own exit. Idempotent; concurrent callers
+  // wait for the first one to finish. This is what the app's close path calls.
   void QuiesceWorkers() {
-    if (quiesce_started_.exchange(true)) return;
+    std::lock_guard<std::mutex> quiesce_lock(quiesce_mutex_);
+    if (quiesced_) return;
+    quiesced_ = true;
     DisableMmio();
+    bool joined = true;
     if (workers_) {
       stop_.Stop();
       { std::lock_guard<std::mutex> lock(work_mutex_); }
       work_changed_.notify_all();
-      workers_->JoinAll();
-      workers_.reset();
+      joined = workers_->JoinAll();
+      if (joined) workers_.reset();  // Otherwise kept: a worker may still be running.
     }
-    if (workers_started_ || ring_generation_) ReportSummary("final");
+    workers_joined_ = joined;
+    bool ring_installed;
+    {
+      std::lock_guard<std::mutex> lock(work_mutex_);
+      ring_installed = ring_generation_ != 0;
+    }
+    if (!joined) {
+      // The counters belong to a thread that may still run: report only the outcome.
+      REXLOG_ERROR("[sr-native] summary kind=final shutdown=incomplete (a worker did not exit in {} ms)",
+                   kJoinTimeoutMs);
+    } else if (workers_started_ || ring_installed) {
+      ReportSummary("final", true);
+    }
   }
 
   // Idempotent. Workers first, then the presentation (clear resources, presenter on the UI
-  // thread, provider). A presentation whose GPU work cannot be drained is retained, not freed.
+  // thread, provider). If a worker did not exit, nothing it may still use is freed.
   void Shutdown() override {
     QuiesceWorkers();
-    presentation_.reset();
+    if (workers_joined_) {
+      presentation_.reset();
+    } else {
+      (void)presentation_.release();
+    }
   }
 
  private:
@@ -288,8 +315,10 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       return false;
     }
     workers_->Add([thread]() mutable {
-      thread->Wait(0, 0, 0, nullptr);
+      uint64_t timeout = uint64_t(-kJoinTimeoutMs * 10000);  // Relative, in 100 ns units.
+      if (thread->Wait(0, 0, 0, &timeout) == X_STATUS_TIMEOUT) return false;
       thread.reset();
+      return true;
     });
     return true;
   }
@@ -319,7 +348,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       }
       bridge.registered_memory = memory_;
     }
-    bridge.target.store(this, std::memory_order_release);
+    bridge.target.store(this);
     mmio_enabled_ = true;
     return true;
   }
@@ -328,9 +357,9 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     if (!mmio_enabled_) return;
     MmioBridge& bridge = Bridge();
     NativeSystem* expected = this;
-    bridge.target.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+    bridge.target.compare_exchange_strong(expected, nullptr);
     // A guest callback may be inside this system right now; wait it out before release.
-    while (bridge.active.load(std::memory_order_acquire) != 0) {
+    while (bridge.active.load() != 0) {
       rex::thread::Sleep(std::chrono::milliseconds(1));
     }
     mmio_enabled_ = false;
@@ -338,19 +367,19 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
 
   static uint32_t MmioRead(void*, void* context, uint32_t address) {
     auto* bridge = static_cast<MmioBridge*>(context);
-    bridge->active.fetch_add(1, std::memory_order_acq_rel);
-    NativeSystem* system = bridge->target.load(std::memory_order_acquire);
+    bridge->active.fetch_add(1);
+    NativeSystem* system = bridge->target.load();
     const uint32_t value = system ? system->ReadMmio(address) : 0;
-    bridge->active.fetch_sub(1, std::memory_order_acq_rel);
+    bridge->active.fetch_sub(1);
     return value;
   }
   static void MmioWrite(void*, void* context, uint32_t address, uint32_t value) {
     auto* bridge = static_cast<MmioBridge*>(context);
-    bridge->active.fetch_add(1, std::memory_order_acq_rel);
-    if (NativeSystem* system = bridge->target.load(std::memory_order_acquire)) {
+    bridge->active.fetch_add(1);
+    if (NativeSystem* system = bridge->target.load()) {
       system->WriteMmio(address, value);
     }
-    bridge->active.fetch_sub(1, std::memory_order_acq_rel);
+    bridge->active.fetch_sub(1);
   }
 
   // Fixed values and effects follow GraphicsSystem::ReadRegister/WriteRegister.
@@ -415,7 +444,18 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     s.interrupt = [this](uint32_t cpu) { return DeliverInterrupt(1, cpu); };
     s.present = [this](uint32_t a, uint32_t b, uint32_t c) { return Present(a, b, c); };
     s.shader_is_memory_safe = [this](uint32_t stage, std::span<const uint32_t> code) {
-      return shader_safety_.IsSafe(stage, code);
+      ShaderSafetyCache::Verdict verdict;
+      const bool safe = shader_safety_.IsSafe(stage, code, &verdict);
+      if (!safe && verdict.fresh && shader_rejects_logged_ < kMaxShaderRejectLogs) {
+        ++shader_rejects_logged_;
+        REXLOG_WARN("[sr-native] SHADER rejected stage={} words={} reason={} first_words={:08X} {:08X} "
+                    "{:08X} {:08X} {:08X} {:08X}",
+                    stage, code.size(), verdict.reason ? verdict.reason : "unknown",
+                    code.size() > 0 ? code[0] : 0, code.size() > 1 ? code[1] : 0,
+                    code.size() > 2 ? code[2] : 0, code.size() > 3 ? code[3] : 0,
+                    code.size() > 4 ? code[4] : 0, code.size() > 5 ? code[5] : 0);
+      }
+      return safe;
     };
     s.cancelled = [this]() { return stop_.cancelled(); };
     s.pause_wait = [this]() {
@@ -495,7 +535,10 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     rex::system::X_VIDEO_MODE mode;
     rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
     const double hz = std::max(1.0, double(float(mode.refresh_rate)));
-    const auto interval = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz));
+    // At least 1 ms: a huge refresh rate must not turn the catch-up loop into a spin.
+    const auto interval = std::max(
+        std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz)),
+        Clock::duration(std::chrono::milliseconds(1)));
     auto next = Clock::now() + interval;
     while (!stop_.cancelled()) {
       const auto now = Clock::now();
@@ -523,8 +566,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       {
         std::unique_lock<std::mutex> lock(work_mutex_);
         work_changed_.wait_for(lock, std::chrono::milliseconds(4), [&] {
-          return stop_.cancelled() || failed_.load(std::memory_order_acquire) ||
-                 ring_generation_ != ring.generation ||
+          return stop_.cancelled() || ring_generation_ != ring.generation ||
                  write_pointer_.load(std::memory_order_acquire) != seen_write || retry_pending_;
         });
         snapshot = {ring_base_, ring_words_, ring_generation_};
@@ -535,12 +577,16 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
         progress_time_ = Clock::now();
       }
       MaybeReport();
-      if (failed_.load(std::memory_order_acquire)) continue;  // Terminal: idle until shutdown.
+      if (failed_.load(std::memory_order_acquire)) {
+        stop_.WaitFor(std::chrono::milliseconds(10));  // Terminal: idle (not spinning) until shutdown.
+        continue;
+      }
       if (snapshot.generation != ring.generation) {
         ResetOnGeneration(ring, snapshot.generation);
         executor = std::make_unique<RingExecutor>(MakeServices());
         seen_write = UINT32_MAX;
         published_read_ = 0;
+        published_address_ = 0;
         retry_pending_ = false;
       }
       if (!executor || !snapshot.words) continue;
@@ -589,13 +635,14 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   // The read pointer only reports packets that were fully consumed.
   void PublishReadPointer(uint32_t position) {
     const uint32_t address = writeback_.load(std::memory_order_acquire);
-    if (!address || position == published_read_) return;
+    if (!address || (position == published_read_ && address == published_address_)) return;
     if (!physical_->Valid(address, 4, true)) {
       Fail(fmt::format("read pointer write-back {:08X} is no longer writable memory", address));
       return;
     }
     rex::memory::store_and_swap<uint32_t>(physical_->HostWritable(address), position);
     published_read_ = position;
+    published_address_ = address;
     RecordNativeProgress();
   }
   // During a long WAIT_REG_MEM the earlier packets of the batch are already consumed.
@@ -645,7 +692,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     if (Clock::now() - last_report_ >= kReportInterval) ReportSummary("interval");
   }
 
-  void ReportSummary(const char* kind) {
+  void ReportSummary(const char* kind, bool shutdown_complete = false) {
     last_report_ = Clock::now();
     const RingCounters& c = last_counters_;
     REXLOG_INFO(
@@ -655,7 +702,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
         c.invalid, c.interrupts, vblanks_.load(std::memory_order_relaxed),
         mmio_wptr_writes_.load(std::memory_order_relaxed), NativeProgress(),
         presentation_ ? presentation_->surface_paints() : 0,
-        std::string_view(kind) == "final" ? " shutdown=complete" : "");
+        shutdown_complete ? " shutdown=complete" : "");
   }
 
   // --- State ---------------------------------------------------------------------------------
@@ -672,7 +719,9 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   std::unique_ptr<WorkerGroup> workers_;
   bool workers_started_ = false;
   bool mmio_enabled_ = false;
-  std::atomic<bool> quiesce_started_{false};
+  std::mutex quiesce_mutex_;
+  bool quiesced_ = false;       // Guarded by quiesce_mutex_.
+  bool workers_joined_ = true;  // Set once, under quiesce_mutex_, before Shutdown reads it.
   std::atomic<bool> failed_{false};
 
   std::unique_ptr<std::atomic<uint32_t>[]> registers_;
@@ -685,7 +734,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   std::atomic<uint32_t> write_pointer_{0};
   std::atomic<uint32_t> writeback_{0};
   Cursor* active_cursor_ = nullptr;  // Ring thread only.
-  uint32_t published_read_ = 0;
+  uint32_t published_read_ = 0, published_address_ = 0;  // Ring thread only.
 
   std::atomic<uint32_t> callback_{0}, callback_data_{0};
   std::atomic<uint64_t> vblanks_{0}, interrupts_delivered_{0}, mmio_wptr_writes_{0};
@@ -697,6 +746,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   Clock::time_point last_report_;
   std::unordered_map<uint64_t, Clock::time_point> wait_sites_;  // Ring thread only.
   std::unordered_map<uint64_t, Clock::time_point> blocked_sites_;  // Ring thread only.
+  uint32_t shader_rejects_logged_ = 0;  // Ring thread only.
   uint64_t progress_seen_ = 0;
   Clock::time_point progress_time_ = Clock::now();
 };

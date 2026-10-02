@@ -6,7 +6,7 @@ a clean exit requested by the user) is a manual step, so the best outcome is
 "needs_console_review". The tool only reads the log it is given; it does not touch the SD
 card or the configuration and publishes nothing.
 
-    python tools/switch/native-report.py LOG [LOG ...]
+    python tools/switch/native-report.py [--expect-build REV] LOG [LOG ...]
 """
 import json
 import re
@@ -24,6 +24,9 @@ FAILURE_PATTERNS = (
     re.compile(r'unable to create'),
     re.compile(r'could not drain'),
     re.compile(r'clear failed'),
+    re.compile(r'unable to register'),
+    re.compile(r'belongs to another guest memory'),
+    re.compile(r'shutdown=incomplete'),
     re.compile(r'invalid renderer configuration'),
 )
 MANUAL_CHECKLIST = (
@@ -61,8 +64,19 @@ def _to_summary(line):
     return summary
 
 
-def parse_report(text):
+def _last_run(text):
+    """A log can hold several runs (the console appends); only the last one is judged."""
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if TAG in line and 'sr_renderer=' in line:
+            start = index
+    return chr(10).join(lines if start is None else lines[start:])
+
+
+def parse_report(text, expect_build=None):
     """Returns a dict with status "blocked" | "failed" | "needs_console_review"."""
+    text = _last_run(text)
     lines = list(_native_lines(text))
     summaries = [_to_summary(line) for line in lines if _is_summary(line)]
     mode = build = None
@@ -71,10 +85,17 @@ def parse_report(text):
         if 'sr_renderer' in fields:
             mode, build = fields['sr_renderer'], fields.get('build')
     blocked_events = []
+    shader_rejects = []
     failures = []
+    stall_lines = []
     for line in lines:
-        if re.match(r'BLOCKED\b', line):
+        if line.startswith('BLOCKED'):
             blocked_events.append({'line': line, **_fields(line)})
+        elif line.startswith('SHADER rejected'):
+            reason = re.search(r'reason=(.*?) first_words=', line)
+            shader_rejects.append({**_fields(line), 'line': line, 'reason': reason.group(1) if reason else ''})
+        elif 'fence wait timed out' in line:
+            stall_lines.append(line)
         elif any(pattern.search(line) for pattern in FAILURE_PATTERNS):
             failures.append(line)
     if 'Invalid sr_renderer' in text:  # Logged by the app without the sr-native tag.
@@ -90,17 +111,26 @@ def parse_report(text):
         failed.append('failure_event')
     if last and last['invalid'] > 0:
         failed.append('invalid_packets')
+    if expect_build and build and build != expect_build:
+        failed.append('build_mismatch')
 
     if last and last['blocked'] > 0:
         blocked.append('blocked_counter')
     if blocked_events:
         blocked.append('blocked_event')
+    if shader_rejects:
+        blocked.append('shader_rejected')
+    if stall_lines:
+        blocked.append('present_stall')
     if last and (last['packets'] == 0 or last.get('progress', 1) == 0):
         blocked.append('no_progress')
-    if len(summaries) >= 2 and 'progress' in summaries[-1] and 'progress' in summaries[-2] \
-            and summaries[-1]['progress'] <= summaries[-2]['progress']:
+    if len(summaries) >= 2 and 'progress' in summaries[-1] and 'progress' in summaries[-2]             and summaries[-1]['progress'] <= summaries[-2]['progress']:
         blocked.append('stalled_progress')
+    # One swap may legitimately be in flight when the final summary is taken.
+    if last and last['swaps'] - last['refreshes'] > 1:
+        blocked.append('swaps_not_presented')
     shutdown_missing = bool(lines) and not any(s['shutdown_complete'] for s in summaries)
+    no_mode = bool(lines) and mode is None
 
     if failed:
         status = 'failed'
@@ -109,11 +139,11 @@ def parse_report(text):
     elif not summaries:
         status = 'failed'
         failed.append('no_report')
-    elif shutdown_missing:
+    elif shutdown_missing or no_mode:
         status = 'failed'
     else:
         status = 'needs_console_review'
-    reasons = failed + blocked + (['shutdown_missing'] if shutdown_missing else [])
+    reasons = failed + blocked + (['shutdown_missing'] if shutdown_missing else [])         + (['no_mode'] if no_mode else [])
     return {
         'status': status,
         'reasons': reasons,
@@ -122,6 +152,7 @@ def parse_report(text):
         'summary': last,
         'summaries': len(summaries),
         'first_blocked': blocked_events[0] if blocked_events else None,
+        'shader_rejects': shader_rejects,
         'failures': failures,
         'manual_review': True,
         'manual_checklist': list(MANUAL_CHECKLIST),
@@ -129,9 +160,18 @@ def parse_report(text):
 
 
 def main(argv=None):
-    paths = list(sys.argv[1:] if argv is None else argv)
+    args = list(sys.argv[1:] if argv is None else argv)
+    expect_build = None
+    if '--expect-build' in args:
+        index = args.index('--expect-build')
+        if index + 1 >= len(args):
+            print('--expect-build needs a value', file=sys.stderr)
+            return 2
+        expect_build = args[index + 1]
+        del args[index:index + 2]
+    paths = args
     if not paths:
-        print('usage: native-report.py LOG [LOG ...]', file=sys.stderr)
+        print('usage: native-report.py [--expect-build REV] LOG [LOG ...]', file=sys.stderr)
         return 2
     worst = 0
     for name in paths:
@@ -139,7 +179,7 @@ def main(argv=None):
         if not path.is_file():
             print(f'{name}: not a file', file=sys.stderr)
             return 2
-        report = parse_report(path.read_text(encoding='utf-8', errors='replace'))
+        report = parse_report(path.read_text(encoding='utf-8', errors='replace'), expect_build)
         print(json.dumps({'log': str(path), **report}, indent=2))
         if report['status'] != 'needs_console_review':
             worst = 1

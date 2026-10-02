@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -55,8 +56,10 @@ inline void ResetOnGeneration(RingGeneration& ring, uint32_t generation) {
   }
 }
 
-// Owns the stop-and-join action of every created worker. Each action runs once,
-// newest first, after the optional stop signal is raised. Safe after partial setup.
+// Owns the stop-and-join action of every created worker. Each action runs newest first, after
+// the optional stop signal is raised, and returns whether the worker was actually joined. A
+// worker that did not exit in time stays in the group (and is retried by the next JoinAll)
+// instead of being forgotten. Safe after partial setup.
 class WorkerGroup {
  public:
   WorkerGroup() = default;
@@ -65,7 +68,7 @@ class WorkerGroup {
   WorkerGroup& operator=(const WorkerGroup&) = delete;
   ~WorkerGroup() { JoinAll(); }
 
-  void Add(std::function<void()> join) {
+  void Add(std::function<bool()> join) {
     std::lock_guard<std::mutex> lock(mutex_);
     joiners_.push_back(std::move(join));
   }
@@ -73,21 +76,31 @@ class WorkerGroup {
     std::lock_guard<std::mutex> lock(mutex_);
     return joiners_.size();
   }
-  void JoinAll() {
-    std::vector<std::function<void()>> joiners;
+  // True when no worker is left unjoined.
+  bool JoinAll() {
+    std::vector<std::function<bool()>> joiners;
     {
       // Taken out under the lock, joined without it: a worker may call Add/size.
       std::lock_guard<std::mutex> lock(mutex_);
       joiners.swap(joiners_);
     }
     if (stop_ && !joiners.empty()) stop_->Stop();
-    for (auto it = joiners.rbegin(); it != joiners.rend(); ++it) (*it)();
+    std::vector<std::function<bool()>> pending;  // Newest first.
+    for (auto it = joiners.rbegin(); it != joiners.rend(); ++it) {
+      if (!(*it)()) pending.push_back(std::move(*it));
+    }
+    if (pending.empty()) return true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Keep creation order for the retry (the vector is joined newest first).
+    joiners_.insert(joiners_.begin(), std::make_move_iterator(pending.rbegin()),
+                    std::make_move_iterator(pending.rend()));
+    return false;
   }
 
  private:
   WorkerStop* stop_ = nullptr;
   mutable std::mutex mutex_;
-  std::vector<std::function<void()>> joiners_;
+  std::vector<std::function<bool()>> joiners_;
 };
 
 // Increases only after a packet was processed, a read-pointer write-back happened

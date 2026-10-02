@@ -66,12 +66,12 @@ static void WorkerGroupTests() {
   std::vector<int> joined;
   {
     WorkerGroup group;
-    group.Add([&] { joined.push_back(1); });
-    group.Add([&] { joined.push_back(2); });
+    group.Add([&] { joined.push_back(1); return true; });
+    group.Add([&] { joined.push_back(2); return true; });
     assert(group.size() == 2);
-    group.JoinAll();
+    assert(group.JoinAll());
     assert((joined == std::vector<int>{2, 1}));  // Reverse creation order.
-    group.JoinAll();  // Repeated shutdown joins nothing twice.
+    assert(group.JoinAll());  // Repeated shutdown joins nothing twice.
     assert(group.size() == 0);
   }
   assert(joined.size() == 2);
@@ -80,7 +80,7 @@ static void WorkerGroupTests() {
   joined.clear();
   {
     WorkerGroup group;
-    group.Add([&] { joined.push_back(7); });
+    group.Add([&] { joined.push_back(7); return true; });
   }
   assert((joined == std::vector<int>{7}));
 
@@ -92,9 +92,25 @@ static void WorkerGroupTests() {
   bool saw_cancel = false;
   {
     WorkerGroup group(&stop);
-    group.Add([&] { saw_cancel = stop.cancelled(); });
+    group.Add([&] { saw_cancel = stop.cancelled(); return true; });
   }
   assert(saw_cancel);
+
+  // A worker that does not exit in time is kept, reported, and joined on a later attempt;
+  // the ones that did join are not joined again.
+  joined.clear();
+  bool slow_exits = false;
+  WorkerGroup group;
+  group.Add([&] { joined.push_back(1); return true; });
+  group.Add([&] { if (!slow_exits) return false; joined.push_back(2); return true; });
+  group.Add([&] { joined.push_back(3); return true; });
+  assert(!group.JoinAll());
+  assert((joined == std::vector<int>{3, 1}));  // The slow one blocked nothing else.
+  assert(group.size() == 1);
+  slow_exits = true;
+  assert(group.JoinAll());
+  assert((joined == std::vector<int>{3, 1, 2}));
+  assert(group.size() == 0);
 }
 
 // --- Presentation sequence with fake acquisition/submission callbacks ----------------------

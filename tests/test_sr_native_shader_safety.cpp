@@ -7,7 +7,7 @@
 using namespace sr::native;
 
 namespace {
-constexpr uint32_t kNop = 0, kExec = 1, kExecEnd = 2, kCondExec = 3, kLoopStart = 7, kLoopEnd = 8,
+constexpr uint32_t kNop = 0, kExec = 1, kExecEnd = 2, kCondExec = 3, kCondExecEnd = 4, kLoopStart = 7, kLoopEnd = 8,
                    kCondCall = 9, kReturn = 10, kCondJmp = 11, kAlloc = 12, kMarkVsFetchDone = 15;
 
 // One control-flow instruction: 32 + 16 bits.
@@ -109,18 +109,46 @@ static void ControlFlow() {
   assert(!ShaderIsMemorySafe(0, Program(Opcode(kReturn, 1), Exec(kExecEnd, 1, 1), {62}, true)));
   assert(ShaderIsMemorySafe(0, Program(Opcode(kReturn), Exec(kExecEnd, 1, 1), {62}, true)));
   // A conditional exec at address 0 overlaps the control flow.
-  assert(!ShaderIsMemorySafe(0, Program(Opcode(kCondExec, 0, 0), Exec(kExecEnd, 1, 1), {62}, true)));
+  assert(!ShaderIsMemorySafe(0, Program(Opcode(kCondExec, 1u << 12, 0), Exec(kExecEnd, 1, 1), {62}, true)));
   // Two control-flow slot pairs: the loop targets stay inside the four slots.
   std::vector<uint32_t> code;
-  Pack(code, Exec(kExecEnd, 2, 1), Opcode(kLoopStart, 3));
-  Pack(code, Opcode(kLoopEnd, 0), Opcode(kNop));
+  Pack(code, Opcode(kLoopStart, 3), Opcode(kLoopEnd, 0));
+  Pack(code, Exec(kExecEnd, 2, 1), Opcode(kNop));
   AddInstruction(code, Alu(62, true));
   assert(ShaderIsMemorySafe(0, code));
   code.clear();
-  Pack(code, Exec(kExecEnd, 2, 1), Opcode(kLoopStart, 4));
-  Pack(code, Opcode(kLoopEnd, 0), Opcode(kNop));
+  Pack(code, Opcode(kLoopStart, 4), Opcode(kLoopEnd, 0));
+  Pack(code, Exec(kExecEnd, 2, 1), Opcode(kNop));
   AddInstruction(code, Alu(62, true));
   assert(!ShaderIsMemorySafe(0, code));  // Target slot 4 is outside the four control-flow slots.
+}
+
+// Execution must not fall off the last scanned control-flow slot into instruction data.
+static void RequiresTerminatingExec() {
+  const char* reason = nullptr;
+  // exec (not End) + nop, then data whose first words decode as a control-flow slot that
+  // references a memexport ALU: the old scan accepted this.
+  std::vector<uint32_t> code;
+  Pack(code, Exec(kExec, 1, 1), Opcode(kNop));
+  AddInstruction(code, 0x1002, 0x2000, 0);   // ALU; decodes as `exece addr=2 cnt=1` if fallen into.
+  AddInstruction(code, Alu(33, true));       // eM0 export.
+  assert(!ShaderIsMemorySafe(0, code, &reason));
+  assert(reason && *reason);
+  // A conditional end may not end the program either.
+  assert(!ShaderIsMemorySafe(0, Program(Exec(kCondExecEnd, 1, 1), Opcode(kNop), {62}, true)));
+  // Trailing nops after the final exec end are fine.
+  assert(ShaderIsMemorySafe(0, Program(Exec(kExecEnd, 1, 1), Opcode(kNop), {62}, true), &reason));
+  assert(!reason || !*reason);
+  // Programs with no control flow at all are not provable.
+  assert(!ShaderIsMemorySafe(0, Program(Opcode(kNop), Opcode(kNop), {62}, true)));
+}
+
+// The compiler's tail `exece` can be empty and point at the end of the program.
+static void AcceptsEmptyTailExec() {
+  std::vector<uint32_t> code;
+  Pack(code, Exec(kExec, 1, 1), Exec(kExecEnd, 2, 0));
+  AddInstruction(code, Alu(62, true));
+  assert(ShaderIsMemorySafe(0, code));
 }
 
 static void FetchClauses() {
@@ -149,6 +177,15 @@ static void CacheTests() {
   assert(!cache.IsSafe(0, unsafe));
   assert(!cache.IsSafe(1, safe));  // Stage is part of the key.
   assert(cache.size() == 3);
+
+  ShaderSafetyCache verdicts;
+  ShaderSafetyCache::Verdict verdict;
+  assert(!verdicts.IsSafe(1, unsafe, &verdict));
+  assert(verdict.fresh && verdict.reason && *verdict.reason);
+  assert(!verdicts.IsSafe(1, unsafe, &verdict));
+  assert(!verdict.fresh && verdict.reason && *verdict.reason);  // Stored answer, not new.
+  assert(verdicts.IsSafe(0, safe, &verdict));
+  assert(verdict.fresh);
 }
 
 int main() {
@@ -157,6 +194,8 @@ int main() {
   RejectsMalformed();
   ControlFlow();
   FetchClauses();
+  RequiresTerminatingExec();
+  AcceptsEmptyTailExec();
   CacheTests();
   return 0;
 }

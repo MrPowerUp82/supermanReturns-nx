@@ -4,6 +4,7 @@
 
 #include "sr_native_present.h"
 
+#include <fmt/format.h>
 #include <rex/logging.h>
 #include <rex/ui/presenter.h>
 #include <rex/ui/vulkan/device.h>
@@ -13,6 +14,8 @@
 
 #include <array>
 #include <chrono>
+#include <string>
+#include <unordered_map>
 
 namespace sr::native {
 namespace {
@@ -51,7 +54,7 @@ struct NativePresentation::State {
   size_t next_framebuffer = 0;
   VkImageView current_view = VK_NULL_HANDLE;  // Valid only inside the refresh callback.
   std::unique_ptr<ClearSequence> sequence;
-  Clock::time_point last_report{};
+  std::unordered_map<std::string, Clock::time_point> last_reports;
 
   const VulkanDevice* device() const { return provider ? provider->vulkan_device() : nullptr; }
 
@@ -94,7 +97,8 @@ struct NativePresentation::State {
     info.pSubpasses = &subpass;
     info.dependencyCount = uint32_t(dependencies.size());
     info.pDependencies = dependencies.data();
-    if (d->functions().vkCreateRenderPass(d->device(), &info, nullptr, &render_pass) != VK_SUCCESS) {
+    if (!Check(d->functions().vkCreateRenderPass(d->device(), &info, nullptr, &render_pass),
+               "vkCreateRenderPass")) {
       render_pass = VK_NULL_HANDLE;
       return false;
     }
@@ -109,7 +113,7 @@ struct NativePresentation::State {
     VkCommandPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pool_info.queueFamilyIndex = d->queue_family_graphics_compute();
-    if (dfn.vkCreateCommandPool(vk_device, &pool_info, nullptr, &pool) != VK_SUCCESS) {
+    if (!Check(dfn.vkCreateCommandPool(vk_device, &pool_info, nullptr, &pool), "vkCreateCommandPool")) {
       pool = VK_NULL_HANDLE;
       return false;
     }
@@ -120,8 +124,9 @@ struct NativePresentation::State {
     allocate.commandBufferCount = 1;
     VkFenceCreateInfo fence_info{};
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    if (dfn.vkAllocateCommandBuffers(vk_device, &allocate, &commands) != VK_SUCCESS ||
-        dfn.vkCreateFence(vk_device, &fence_info, nullptr, &fence) != VK_SUCCESS) {
+    if (!Check(dfn.vkAllocateCommandBuffers(vk_device, &allocate, &commands),
+               "vkAllocateCommandBuffers") ||
+        !Check(dfn.vkCreateFence(vk_device, &fence_info, nullptr, &fence), "vkCreateFence")) {
       // Nothing was submitted yet: undo this partial creation so the caller sees all-or-nothing.
       DestroyCommandResources();
       return false;
@@ -161,7 +166,8 @@ struct NativePresentation::State {
     info.width = kOutputWidth;
     info.height = kOutputHeight;
     info.layers = 1;
-    if (dfn.vkCreateFramebuffer(d->device(), &info, nullptr, &slot.framebuffer) != VK_SUCCESS) {
+    if (!Check(dfn.vkCreateFramebuffer(d->device(), &info, nullptr, &slot.framebuffer),
+               "vkCreateFramebuffer")) {
       slot.framebuffer = VK_NULL_HANDLE;
       return false;
     }
@@ -187,10 +193,15 @@ struct NativePresentation::State {
       if (f.framebuffer != VK_NULL_HANDLE && f.version == version) framebuffer = f.framebuffer;
     }
     if (framebuffer == VK_NULL_HANDLE) return SubmitResult::kFailed;
+    if (!Check(dfn.vkResetCommandPool(d->device(), pool, 0), "vkResetCommandPool (before record)")) {
+      return SubmitResult::kFailed;
+    }
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (dfn.vkBeginCommandBuffer(commands, &begin) != VK_SUCCESS) return SubmitResult::kFailed;
+    if (!Check(dfn.vkBeginCommandBuffer(commands, &begin), "vkBeginCommandBuffer")) {
+      return SubmitResult::kFailed;
+    }
     VkClearValue black{};  // Opaque black.
     black.color.float32[3] = 1.0f;
     VkRenderPassBeginInfo pass{};
@@ -202,7 +213,7 @@ struct NativePresentation::State {
     pass.pClearValues = &black;
     dfn.vkCmdBeginRenderPass(commands, &pass, VK_SUBPASS_CONTENTS_INLINE);
     dfn.vkCmdEndRenderPass(commands);
-    if (dfn.vkEndCommandBuffer(commands) != VK_SUCCESS) return SubmitResult::kFailed;
+    if (!Check(dfn.vkEndCommandBuffer(commands), "vkEndCommandBuffer")) return SubmitResult::kFailed;
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
@@ -214,6 +225,7 @@ struct NativePresentation::State {
       result = dfn.vkQueueSubmit(queue.queue(), 1, &submit, fence);
     }
     if (result == VK_SUCCESS) return SubmitResult::kOk;
+    Check(result, "vkQueueSubmit");
     return result == VK_ERROR_DEVICE_LOST ? SubmitResult::kDeviceLost : SubmitResult::kFailed;
   }
 
@@ -231,8 +243,8 @@ struct NativePresentation::State {
   void ResetForReuse() {
     const VulkanDevice* d = device();
     if (!d) return;
-    d->functions().vkResetFences(d->device(), 1, &fence);
-    d->functions().vkResetCommandPool(d->device(), pool, 0);
+    Check(d->functions().vkResetFences(d->device(), 1, &fence), "vkResetFences");
+    Check(d->functions().vkResetCommandPool(d->device(), pool, 0), "vkResetCommandPool");
   }
 
   void DestroyRenderPass() {
@@ -241,11 +253,23 @@ struct NativePresentation::State {
     render_pass = VK_NULL_HANDLE;
   }
 
-  void Report(const char* what) {
+  // One timestamp per distinct message: different failures never suppress each other.
+  void Report(const std::string& what) {
     const auto now = Clock::now();
-    if (last_report != Clock::time_point{} && now - last_report < kReportInterval) return;
-    last_report = now;
+    auto [it, inserted] = last_reports.emplace(what, now);
+    if (!inserted) {
+      if (now - it->second < kReportInterval) return;
+      it->second = now;
+    } else if (last_reports.size() > 64) {
+      return;  // Bounded: after 64 distinct messages only the summary speaks.
+    }
     REXLOG_WARN("[sr-native] present: {}", what);
+  }
+
+  bool Check(VkResult result, const char* step) {
+    if (result == VK_SUCCESS) return true;
+    Report(fmt::format("{} failed with VkResult {}", step, int(result)));
+    return false;
   }
 
   ClearOps MakeOps() {
