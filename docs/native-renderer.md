@@ -1,7 +1,7 @@
 # Native renderer (milestone 1)
 
-Status: Tasks 1-5 of `docs/superpowers/plans/2026-10-01-renderer-nativo-marco1.md` are implemented
-and host-tested. Nothing here has run on the Switch yet. Milestone 1 only consumes the PM4 stream and presents an opaque black image; game draws
+Status: Tasks 1-7 of `docs/superpowers/plans/2026-10-01-renderer-nativo-marco1.md` are implemented
+and host-tested, but the milestone is **not accepted**: no console round has run (see `checkpoint8.md`). Milestone 1 only consumes the PM4 stream and presents an opaque black image; game draws
 are counted as omitted.
 
 Adapted from nfsmw-nx (`nfsmw_nativo_sistema`, revision `df2de32ee569873062b8f8d1da8ad0b8d0a90a5d`).
