@@ -19,7 +19,8 @@ endif()
 include(cmake/rexglue.cmake)
 
 set(SR_SOURCES src/main.cpp src/sr_settings.cpp src/xma_fixes.cpp src/skip_intro.cpp
-    src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp)
+    src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp
+    src/sr_native_ring.cpp src/sr_native_shader_safety.cpp src/sr_native_system.cpp)
 if(WIN32)
     add_executable(superman_returns WIN32 ${SR_SOURCES})
 else()
