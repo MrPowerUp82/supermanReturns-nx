@@ -10,6 +10,10 @@ That local project has no separate LICENSE file; publication of those hooks
 requires establishing their licensing. No original game files or generated
 game code are included in the source repository. See `docs/provenance.json`.
 
+## Native renderer (adapted from nfsmw-nx)
+
+`app/src/sr_native_*` adapt the native graphics system of [StevensND/nfsmw-nx](https://github.com/StevensND/nfsmw-nx) (`app/src/nfsmw_nativo_sistema.*`, revision `df2de32ee569873062b8f8d1da8ad0b8d0a90a5d`, licensed GPL-3.0): the MMIO ranges, ring worker, vblank worker, interrupt delivery and the Vulkan clear route. The PM4 parser/executor, memory validation, shader proof and lifecycle helpers are new code in this repository, written against that behavior and the SDK. NFSMW-specific hooks, addresses, the shader library and scene paths were not imported. That reference has no per-file license headers; the repository license applies. Details in [docs/native-renderer.md](docs/native-renderer.md).
+
 The upstream notices below are retained verbatim for attribution; references
 to NFSMW-specific app, shader translator or shader files describe the upstream
 project, not components imported into this Superman application.

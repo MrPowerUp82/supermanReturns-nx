@@ -50,6 +50,7 @@ constexpr uint32_t kMmioMask = 0xFFFF0000;
 constexpr uint32_t kMmioSize = 0x0000FFFF;
 constexpr uint32_t kPhysicalLimit = 0x20000000;
 constexpr uint32_t kMaxRingSizeLog2 = 26;  // (1 << (size_log2 + 3)) bytes must fit the physical space.
+constexpr size_t kMaxBlockedKeys = 32;  // Distinct blocked sites reported before only the summary speaks.
 constexpr uint32_t kRegisterCount = uint32_t(rex::graphics::RegisterFile::kRegisterCount);
 constexpr uint32_t kRegCpRbWptr = 0x01C5;
 constexpr uint32_t kRegRbEdramTiming = 0x0F00;
@@ -58,7 +59,7 @@ constexpr uint32_t kRegD1GrphPrimarySurface = 0x1844;
 constexpr uint32_t kRegD1ModeVCounter = 0x194C;
 constexpr uint32_t kRegD1ModeVblankVlineStatus = 0x1951;
 constexpr uint32_t kRegD1ModeViewportSize = 0x1961;
-constexpr auto kReportInterval = std::chrono::seconds(5);
+constexpr auto kReportInterval = std::chrono::seconds(10);
 constexpr auto kRepeatInterval = std::chrono::seconds(5);
 
 // --- Physical memory access ----------------------------------------------------------
@@ -529,6 +530,10 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
         snapshot = {ring_base_, ring_words_, ring_generation_};
       }
       if (stop_.cancelled()) break;
+      if (const uint64_t progress = NativeProgress(); progress != progress_seen_) {
+        progress_seen_ = progress;
+        progress_time_ = Clock::now();
+      }
       MaybeReport();
       if (failed_.load(std::memory_order_acquire)) continue;  // Terminal: idle until shutdown.
       if (snapshot.generation != ring.generation) {
@@ -600,23 +605,38 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
 
   // --- Diagnostics -----------------------------------------------------------------------
 
+  // The first event of every blocked site (opcode + location) is always logged; repeats are
+  // limited per site, and after kMaxBlockedKeys distinct sites only the summary reports them.
   void ReportBlocked(const RingCounters& counters, uint32_t ring_word) {
     const auto now = Clock::now();
-    const bool first = !blocked_reported_;
-    if (!first && now - last_blocked_report_ < kRepeatInterval) return;
-    blocked_reported_ = true;
-    last_blocked_report_ = now;
+    const uint64_t key = (uint64_t(counters.last_blocked_opcode) << 32) | counters.last_blocked_address;
+    auto it = blocked_sites_.find(key);
+    if (it == blocked_sites_.end()) {
+      if (blocked_sites_.size() >= kMaxBlockedKeys) return;
+      it = blocked_sites_.emplace(key, Clock::time_point{}).first;
+    } else if (now - it->second < kRepeatInterval) {
+      return;
+    }
+    it->second = now;
+    const auto stalled_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - progress_time_).count();
     REXLOG_WARN("[sr-native] BLOCKED opcode={:02X} at={:08X} ring_word={} blocked={} shader_blocked={} "
-                "last_progress={}",
+                "last_progress={} progress_stalled_ms={}",
                 counters.last_blocked_opcode, counters.last_blocked_address, ring_word,
-                counters.blocked, counters.draws_shader_blocked, NativeProgress());
+                counters.blocked, counters.draws_shader_blocked, NativeProgress(), stalled_ms);
   }
 
   void ReportWait(uint32_t info, uint32_t address, uint32_t reference, uint32_t mask) {
     const auto now = Clock::now();
-    if (wait_reported_ && now - last_wait_report_ < kRepeatInterval) return;
-    wait_reported_ = true;
-    last_wait_report_ = now;
+    const uint64_t key = (uint64_t(address) << 32) | info;
+    auto it = wait_sites_.find(key);
+    if (it == wait_sites_.end()) {
+      if (wait_sites_.size() >= kMaxBlockedKeys) return;
+      it = wait_sites_.emplace(key, Clock::time_point{}).first;
+    } else if (now - it->second < kRepeatInterval) {
+      return;
+    }
+    it->second = now;
     REXLOG_WARN("[sr-native] WAIT pending info={:08X} address={:08X} reference={:08X} mask={:08X}", info,
                 address, reference, mask);
   }
@@ -674,8 +694,11 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   std::mutex log_mutex_;
   std::set<std::pair<std::string, uint32_t>> logged_;
   RingCounters last_counters_;  // Ring thread writes; summary reads after join or on that thread.
-  Clock::time_point last_report_, last_blocked_report_, last_wait_report_;
-  bool blocked_reported_ = false, wait_reported_ = false;
+  Clock::time_point last_report_;
+  std::unordered_map<uint64_t, Clock::time_point> wait_sites_;  // Ring thread only.
+  std::unordered_map<uint64_t, Clock::time_point> blocked_sites_;  // Ring thread only.
+  uint64_t progress_seen_ = 0;
+  Clock::time_point progress_time_ = Clock::now();
 };
 
 }  // namespace

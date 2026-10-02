@@ -1,12 +1,41 @@
 # Native renderer (milestone 1)
 
-Status: Tasks 1-4 of `docs/superpowers/plans/2026-10-01-renderer-nativo-marco1.md` are implemented
-and host-tested. The renderer is not selectable yet (Task 5) and nothing here has run on the
-Switch. Milestone 1 only consumes the PM4 stream and presents an opaque black image; game draws
+Status: Tasks 1-5 of `docs/superpowers/plans/2026-10-01-renderer-nativo-marco1.md` are implemented
+and host-tested. Nothing here has run on the Switch yet. Milestone 1 only consumes the PM4 stream and presents an opaque black image; game draws
 are counted as omitted.
 
 Adapted from nfsmw-nx (`nfsmw_nativo_sistema`, revision `df2de32ee569873062b8f8d1da8ad0b8d0a90a5d`).
 NFSMW hooks, the shader library and scene paths were not imported.
+
+## Selecting the renderer
+
+`sr_renderer = "xenos" | "native"` in `superman_returns.toml` (default `xenos`, requires restart).
+The choice holds for the whole run: no runtime switching and no per-draw fallback to Xenos.
+Any other value is an error: native setup fails and the run ends instead of silently using Xenos.
+`pack_shaders` keeps controlling only the existing hybrid Xenos route. Each run logs
+`[sr-native] sr_renderer=<mode> milestone=1 build=<source revision>` (the revision comes from
+`SR_BUILD_REVISION` or git at configure time; it identifies the source, not the NRO bytes, so
+record the artifact SHA256 separately).
+
+Closing the app stops and joins the native workers before the SDK terminates the title and
+hard-exits (`OnWindowCloseRequested` / `OnClosing`); the final summary then carries
+`shutdown=complete`. Xenos is unaffected.
+
+## What to expect from milestone 1
+
+- The expected visual result is a **black screen**. No scene is drawn.
+- A test round is **invalid** when any `BLOCKED`, `invalid` or `FAILED` line appears: milestone 1
+  is not accepted with a blocker, and the first such event identifies what to implement next.
+- There is no 30 FPS claim: `surface_paints` and `refreshes` are not game frame rates, and a
+  black clear says nothing about draw cost.
+
+## Log lines
+
+A `[sr-native] summary` line is written every 10 s and once at shutdown. `BLOCKED` lines carry
+opcode, ring/indirect location, counters, the last progress value and how long progress has been
+stalled; `WAIT pending` lines carry the wait condition. The first event of every distinct site is
+always logged, repeats are limited to one per 5 s per site, and after 32 distinct sites only the
+summary reports them.
 
 ## Counters
 
