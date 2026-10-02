@@ -21,7 +21,7 @@ include(cmake/rexglue.cmake)
 set(SR_SOURCES src/main.cpp src/sr_settings.cpp src/xma_fixes.cpp src/skip_intro.cpp
     src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp
     src/sr_native_ring.cpp src/sr_native_shader_safety.cpp src/sr_native_present.cpp
-    src/sr_native_system.cpp)
+    src/sr_native_system.cpp src/sr_native_guest.cpp)
 set(SR_BUILD_REVISION "$ENV{SR_BUILD_REVISION}")
 if(NOT SR_BUILD_REVISION)
     execute_process(COMMAND git rev-parse --short=12 HEAD
