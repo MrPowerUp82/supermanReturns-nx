@@ -18,7 +18,7 @@ Any other value is an error: native setup fails and the run ends instead of sile
 record the artifact SHA256 separately).
 
 Closing the app stops and joins the native workers before the SDK terminates the title and
-hard-exits (`OnWindowCloseRequested` / `OnClosing`); the final summary then carries
+hard-exits (`ReXApp::OnWindowClosing`, called from the SDK `OnClosing`); the final summary then carries
 `shutdown=complete`. Xenos is unaffected.
 
 ## What to expect from milestone 1

@@ -56,15 +56,8 @@ class SupermanReturnsApp : public rex::ReXApp {
   }
 
   // The SDK hard-exits after TerminateTitle without running destructors, so the native
-  // workers are stopped and joined here first. No effect with Xenos.
-  bool OnWindowCloseRequested() override {
-    QuiesceNative();
-    return true;
-  }
-  void OnClosing(rex::ui::UIEvent& e) override {
-    QuiesceNative();
-    rex::ReXApp::OnClosing(e);
-  }
+  // workers are stopped and joined first (OnClosing calls this hook). No effect with Xenos.
+  void OnWindowClosing() override { QuiesceNative(); }
 
   void OnPostInitLogging() override {
     SetDefault("gpu_plugin", "xenos");

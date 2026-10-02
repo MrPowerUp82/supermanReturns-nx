@@ -208,6 +208,9 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   /// stopping guest threads and draining renderers. Default accepts; the
   /// window then closes and the app quits via the OnClosing path.
   virtual bool OnWindowCloseRequested() { return true; }
+  /// Called once the window is closing, before the title is terminated and the process
+  /// hard-exits without running destructors. Apps that own host worker threads stop them here.
+  virtual void OnWindowClosing() {}
 
   virtual void OnWindowFocusChanged(bool focused) { (void)focused; }
 
