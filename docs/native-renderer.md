@@ -77,3 +77,33 @@ quantities and must not be read as frame rate.
 
 Host tests use fake callbacks. The Vulkan clear, the UI-thread paint path, the interrupt delivery
 and the shutdown order still need the console rounds in Tasks 6-7.
+
+## Console test procedure (milestone 1)
+
+Two equivalent rounds, each: boot, 60 s, then a manual exit in full (hbmenu full) mode. One
+thing changes per round (`sr_renderer`); the previous NROs and configuration are kept.
+
+1. **Build.** Host tests: `docker run --rm --mount "type=bind,source=<repo>,target=/project" -w /project superman-returns-nx-mesa:build bash tests/test_sr_native.sh`.
+   NRO: `tools/switch/rebuild.sh` in the `superman-returns-nx-check` volume (incremental; if
+   `/work/game-check/CMakeCache.txt` is missing run `tools/switch/compile-check.sh` first, never
+   delete the volume). Set `SR_BUILD_REVISION` to the source revision when building.
+2. **Name and record.** Copy the NRO to `superman_returns-native-boot-test.nro`, keep the ELF
+   from the same link in `out/console/symbols/` and note size and SHA-256 of both
+   (`out/console/builds/<build>/MANIFEST.txt`). Never symbolize a failure with another NRO's ELF.
+3. **Upload (FTP `192.168.100.37:5000`, server enabled by the user).** `cwd` into
+   `/switch/superman-returns-nx` *before* listing. Download `superman_returns.toml` as a backup
+   and check it is the current one before editing; change only `sr_renderer`. Upload the new NRO
+   under its new name, then download it back and compare size and hash. Do not overwrite earlier
+   NROs or any game package.
+4. **Round.** The user opens the NRO. Round A: `sr_renderer = "xenos"` (baseline). Round B:
+   `sr_renderer = "native"`. The user reports audio, boot progress and how the exit went.
+5. **Collect** the log and the TOML into a new local folder named by date, build and mode, and run
+   `python tools/switch/native-report.py <log>`. If the run is blocked, ask for an exit and
+   download the log; do not change synchronization to make it look like progress. Restore only the
+   key that was changed, and only if that keeps later edits by the user.
+
+`native-report.py` never reports a pass. Its statuses are `failed` (setup/Vulkan failure, invalid
+packets, no report, missing `shutdown=complete`, not a native run), `blocked` (blocked counter or
+`BLOCKED` event, no or stalled progress) and `needs_console_review`, which still requires the
+manual checklist it prints. Presentation counters (`refreshes`, `surface_paints`) never turn a
+blocked run into a pass. It only reads the log: no SD or config access, nothing is published.
