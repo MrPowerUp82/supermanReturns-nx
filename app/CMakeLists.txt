@@ -18,6 +18,13 @@ if(NOT SR_MANIFEST_HASH STREQUAL SR_CODEGEN_HASH)
 endif()
 include(cmake/rexglue.cmake)
 
+if(REXGLUE_PLATFORM_SWITCH)
+    # This large table registers symbols once at boot. GCC -O3 spends minutes
+    # optimizing the registration block; it is not part of the game hot path.
+    set_source_files_properties(generated/default/superman_returns_register.cpp
+        PROPERTIES COMPILE_OPTIONS "-O0")
+endif()
+
 set(SR_SOURCES src/main.cpp src/sr_settings.cpp src/xma_fixes.cpp src/skip_intro.cpp
     src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp
     src/sr_native_ring.cpp src/sr_native_shader_safety.cpp src/sr_native_present.cpp
