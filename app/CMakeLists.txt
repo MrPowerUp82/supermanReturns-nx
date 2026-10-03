@@ -56,8 +56,9 @@ if(REXGLUE_PLATFORM_SWITCH)
         endforeach()
         target_link_options(superman_returns PRIVATE -flto=2 -flto-partition=balanced)
     endif()
+    set(SR_NRO_NAME "Superman Returns NX (experimental)" CACHE STRING "hbmenu display name")
     rexglue_switch_add_nro(superman_returns
-        NAME "Superman Returns NX (experimental)"
+        NAME "${SR_NRO_NAME}"
         AUTHOR "Superman Returns NX contributors" VERSION "${PROJECT_VERSION}")
 elseif(TARGET imgui)
     target_include_directories(superman_returns PRIVATE
