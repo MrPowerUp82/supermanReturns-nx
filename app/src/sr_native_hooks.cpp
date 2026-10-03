@@ -64,6 +64,24 @@ void ReportRejectedScan(NativeResult result,PacketSite site,std::span<const std:
     CommitPacket(cursor,packet);
   }
 }
+bool ValidPhysical(uint32_t address,uint32_t size) {
+  auto* memory=LiveMemory();
+  if (!memory || !size || uint64_t(address)+size>0x20000000ull) return false;
+  auto* heap=memory->GetPhysicalHeap();
+  const uint32_t page=heap->page_size();
+  if (!page) return false;
+  const uint64_t end=uint64_t(address)+size;
+  for(uint64_t cursor=address;cursor<end;) {
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(uint32_t(cursor),&info) ||
+        !(info.state & rex::memory::kMemoryAllocationCommit) ||
+        !(info.protect & rex::memory::kMemoryProtectRead)) return false;
+    const uint64_t next=(cursor & ~uint64_t(page-1))+info.region_size;
+    if (next<=cursor) return false;
+    cursor=next;
+  }
+  return true;
+}
 struct HookContext {
   GuestMemory memory{{ValidGuest,
     [](uint32_t a,std::span<std::byte> out) {
@@ -73,6 +91,11 @@ struct HookContext {
     [](uint32_t a,std::span<const std::byte> in) {
       if (!ValidGuest(a,uint32_t(in.size()),true)) return false;
       std::memcpy(LiveMemory()->TranslateVirtual<std::byte*>(a),in.data(),in.size());return true;
+    },ValidPhysical,
+    [](uint32_t address,std::span<std::byte> out) {
+      if (!ValidPhysical(address,uint32_t(out.size()))) return false;
+      std::memcpy(out.data(),LiveMemory()->TranslatePhysical<const std::byte*>(address),out.size());
+      return true;
     }}};
   NativeCaptureBridge bridge{memory,[](uint32_t a,uint32_t& physical) {
     auto* memory=LiveMemory(); if (!memory) return false;

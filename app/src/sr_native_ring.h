@@ -44,6 +44,9 @@ struct Services {
   // Read-only proof supplied by the adapter: stage 0=VS, 1=PS, host-order code.
   // Missing/false means a draw using this shader remains blocked (may memexport).
   std::function<bool(uint32_t, std::span<const uint32_t>)> shader_is_memory_safe;
+  // Only the initial VC-only invalidate before any guest draw. True requires
+  // that the adapter actually acknowledge it; never completes GPU work/fences.
+  std::function<bool(uint32_t, uint32_t, uint32_t)> startup_vertex_coherence;
   std::function<bool()> cancelled;
   // Short, cancellable adapter pause between false wait probes.
   std::function<void()> pause_wait;

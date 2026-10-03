@@ -28,6 +28,14 @@ bool GuestMemory::ReadU32(GuestAddress address, uint32_t& out) const {
   out = value;
   return true;
 }
+bool GuestMemory::CopyPhysical(uint32_t address,uint32_t size,std::vector<std::byte>& out) const {
+  if (uint64_t(address)+size>0x20000000ull) return false;
+  if (size && (!operations_.valid_physical || !operations_.read_physical ||
+      !operations_.valid_physical(address,size))) return false;
+  std::vector<std::byte> copy(size);
+  if (size && !operations_.read_physical(address,copy)) return false;
+  out=std::move(copy);return true;
+}
 
 bool GuestMemory::Write(GuestAddress address, std::span<const std::byte> bytes) const {
   if (!Valid(address, bytes.size(), true)) return false;

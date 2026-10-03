@@ -443,6 +443,19 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     };
     s.interrupt = [this](uint32_t cpu) { return DeliverInterrupt(1, cpu); };
     s.present = [this](uint32_t a, uint32_t b, uint32_t c) { return Present(a, b, c); };
+    s.startup_vertex_coherence = [this](uint32_t status,uint32_t base,uint32_t size) {
+      // Before the first guest draw there are no native guest vertex buffers or
+      // queued guest GPU work to invalidate. The presenter uses private images.
+      // This acknowledges only the observed startup VC request. Later requests
+      // require the real resource cache/serial backend and remain blocked here.
+      if (guest_draws_seen_ || status!=0x81000000 || !size || !ValidPhysicalRange(base,size)) return false;
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+      uint32_t expected=status;
+      if (!registers_[rex::graphics::XE_GPU_REG_COHER_STATUS_HOST].compare_exchange_strong(
+            expected,0,std::memory_order_acq_rel)) return false;
+      REXLOG_INFO("[sr-native] startup vertex cache invalidated base={:08X} bytes={:08X}; no guest GPU work submitted",base,size);
+      return true;
+    };
     s.shader_is_memory_safe = [this](uint32_t stage, std::span<const uint32_t> code) {
       ShaderSafetyCache::Verdict verdict;
       const bool safe = shader_safety_.IsSafe(stage, code, &verdict);
@@ -602,6 +615,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       PacketResult result;
       for (;;) {
         result = executor->ProcessNext(cursor);
+        if (executor->counters().draws_omitted) guest_draws_seen_=true;
         if (result != PacketResult::kConsumed) break;
         RecordNativeProgress();
       }
@@ -736,6 +750,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   std::condition_variable work_changed_;
   uint32_t ring_base_ = 0, ring_words_ = 0, ring_generation_ = 0;
   bool retry_pending_ = false;  // Ring thread only.
+  bool guest_draws_seen_ = false; // Ring thread only; survives ring replacement.
   std::atomic<uint32_t> write_pointer_{0};
   std::atomic<uint32_t> writeback_{0};
   Cursor* active_cursor_ = nullptr;  // Ring thread only.

@@ -59,10 +59,23 @@ int main() {
   std::map<uint32_t,std::vector<std::byte>> physical;
   physical[0xa0000400]=BE({0xc0013f00,0x400,3});
   GuestMemory cyclic({[&](uint32_t a,uint32_t n,bool){return physical.contains(a)&&physical[a].size()==n;},
-      [&](uint32_t a,std::span<std::byte> out){std::memcpy(out.data(),physical[a].data(),out.size());return true;},{}});
+      [&](uint32_t a,std::span<std::byte> out){std::memcpy(out.data(),physical[a].data(),out.size());return true;},{},
+      [&](uint32_t a,uint32_t n){return physical.contains(0xa0000000+a)&&physical[0xa0000000+a].size()==n;},
+      [&](uint32_t a,std::span<std::byte> out){std::memcpy(out.data(),physical[0xa0000000+a].data(),out.size());return true;}});
   mirror.ResetSegment(3);
   assert(mirror.Scan(cyclic,indirect,{3,0x100})==NativeResult::kInvalid);
   assert(mirror.VsVersion()==latest_version);
+  // Physical shader/constant reads must not depend on a committed A000 alias.
+  GuestMemory gpu({{}, {}, {},
+    [](uint32_t a,uint32_t n){return (a==0x100 && n==4)||(a==0x200 && n==8);},
+    [](uint32_t a,std::span<std::byte> target){
+      const auto data=a==0x100?BE({0x12345678}):BE({0x87654321,0xabcdef01});
+      std::copy(data.begin(),data.end(),target.begin());return true;
+    }});
+  StateMirror loaded;loaded.ResetSegment(1);
+  assert(loaded.Scan(gpu,BE({0xc0022f00,0x100,0x7f0,1,0xc0012700,0x201,2}),{1,0x400})==NativeResult::kComplete);
+  assert(loaded.Register(0x47f0)==0x12345678);
+  assert(loaded.ShaderCode(false)==std::vector<uint32_t>({0x87654321,0xabcdef01}));
   auto unknown=BE({0xc0007f00,0});
   assert(mirror.Scan(memory,unknown,{3,0x100})==NativeResult::kUnsupported);
   assert(mirror.VsVersion()==latest_version);

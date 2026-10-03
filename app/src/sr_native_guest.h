@@ -18,9 +18,13 @@ class GuestMemory {
     std::function<bool(GuestAddress, uint32_t, bool write)> valid;
     std::function<bool(GuestAddress, std::span<std::byte>)> read;
     std::function<bool(GuestAddress, std::span<const std::byte>)> write;
+    std::function<bool(uint32_t, uint32_t)> valid_physical = {};
+    std::function<bool(uint32_t, std::span<std::byte>)> read_physical = {};
   };
   explicit GuestMemory(Operations operations);
   bool Copy(GuestAddress address, uint32_t size, std::vector<std::byte>& out) const;
+  // Canonical GPU physical address; never infer commitment from a virtual alias.
+  bool CopyPhysical(uint32_t address, uint32_t size, std::vector<std::byte>& out) const;
   bool ReadU32(GuestAddress address, uint32_t& out) const;
   bool Write(GuestAddress address, std::span<const std::byte> bytes) const;
 

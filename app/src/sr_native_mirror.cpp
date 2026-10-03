@@ -83,7 +83,7 @@ NativeResult StateMirror::ScanImpl(const GuestMemory& memory,std::span<const std
           const auto address=p[0]&0x3fffffff, count=p[2]&0xfff, base=ConstantBase(p[1]);
           if(base==UINT32_MAX || !PhysicalRange(address,uint64_t(count)*4)) return NativeResult::kInvalid;
           std::vector<std::byte> data;
-          if(count && !memory.Copy(0xa0000000u+address,count*4,data)) return NativeResult::kInvalid;
+          if(count && !memory.CopyPhysical(address,count*4,data)) return NativeResult::kInvalid;
           for(uint32_t i=0;i<count;++i) if(!Write(base+(p[1]&0x7ff)+i,BE(data,i*4))) return NativeResult::kInvalid;
           break;
         }
@@ -93,7 +93,7 @@ NativeResult StateMirror::ScanImpl(const GuestMemory& memory,std::span<const std
           if(!PhysicalRange(address,uint64_t(count)*4) || count>budget ||
              std::find(indirects.begin(),indirects.end(),address)!=indirects.end()) return NativeResult::kInvalid;
           std::vector<std::byte> data;
-          if(!memory.Copy(0xa0000000u+address,count*4,data)) return NativeResult::kInvalid;
+          if(!memory.CopyPhysical(address,count*4,data)) return NativeResult::kInvalid;
           indirects.push_back(address);
           const auto result=ScanImpl(memory,data,{site.allocation_epoch,address},indirects,budget);
           indirects.pop_back();
@@ -105,7 +105,7 @@ NativeResult StateMirror::ScanImpl(const GuestMemory& memory,std::span<const std
           const uint32_t count=p[1], address=p[0]&~3u;
           if(!PhysicalRange(address,uint64_t(count)*4)) return NativeResult::kInvalid;
           std::vector<std::byte> data;
-          if(count && !memory.Copy(0xa0000000u+address,count*4,data)) return NativeResult::kInvalid;
+          if(count && !memory.CopyPhysical(address,count*4,data)) return NativeResult::kInvalid;
           auto& code=code_[p[0]&3]; code.resize(count);
           for(uint32_t i=0;i<count;++i) code[i]=BE(data,i*4);
           break;

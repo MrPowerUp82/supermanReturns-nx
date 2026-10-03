@@ -44,5 +44,22 @@ int main() {
   assert(memory.Copy(0, 0, out) && out.empty());
   GuestMemory disconnected({});
   assert(!disconnected.Copy(0, 1, out));
+  unsigned physical_reads=0;
+  GuestMemory physical({{}, {}, {},
+    [&](uint32_t a,uint32_t n){return committed && uint64_t(a)+n<=bytes.size();},
+    [&](uint32_t a,std::span<std::byte> target) {
+      ++physical_reads;
+      target[0]=std::byte{0xff};
+      if (!read_ok) return false;
+      std::memcpy(target.data(),bytes.data()+a,target.size());return true;
+    }});
+  assert(!physical.Copy(0xa0000000,4,out));
+  assert(physical.CopyPhysical(0,4,out) && out[0]==std::byte{0x12});
+  auto saved=out;
+  assert(!physical.CopyPhysical(0x1ffffffe,4,out) && out==saved && physical_reads==1);
+  read_ok=false;
+  assert(!physical.CopyPhysical(0,4,out) && out==saved);
+  committed=false;
+  assert(!physical.CopyPhysical(0,4,out) && physical_reads==2);
   std::puts("guest memory: transactional range and endian tests passed");
 }

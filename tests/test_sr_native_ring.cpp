@@ -175,6 +175,30 @@ static void WaitTests() {
   assert(Run(coher, Packet(PM4_WAIT_REG_MEM, {3, XE_GPU_REG_COHER_STATUS_HOST, 0, ~0u, 0})) == PacketResult::kBlocked);
   assert(f.regs[XE_GPU_REG_COHER_STATUS_HOST] == 0x80000000 && f.writes == 0);
   assert(dirty_reports==1);
+  auto startup_services=f.services();
+  unsigned coher_probes=0;
+  startup_services.startup_vertex_coherence=[&](uint32_t status,uint32_t base,uint32_t size) {
+    assert(status==0x81000000 && base==0x1f4d0000 && size==0x700000);
+    if (++coher_probes==1) return false;
+    f.regs[XE_GPU_REG_COHER_STATUS_HOST]=0;return true;
+  };
+  f.regs[XE_GPU_REG_COHER_STATUS_HOST]=0x81000000;
+  f.regs[XE_GPU_REG_COHER_BASE_HOST]=0x1f4d0000;
+  f.regs[XE_GPU_REG_COHER_SIZE_HOST]=0x700000;
+  RingExecutor startup(startup_services);
+  auto startup_packet=Packet(PM4_WAIT_REG_MEM,{3,XE_GPU_REG_COHER_STATUS_HOST,0,0x80000000,0});
+  Cursor startup_cursor{startup_packet,0,uint32_t(startup_packet.size()/4),0};
+  assert(startup.ProcessNext(startup_cursor)==PacketResult::kBlocked && startup_cursor.position==0);
+  assert(f.regs[XE_GPU_REG_COHER_STATUS_HOST]==0x81000000);
+  assert(startup.ProcessNext(startup_cursor)==PacketResult::kConsumed && coher_probes==2);
+  f.regs[XE_GPU_REG_COHER_STATUS_HOST]=0x80010000; // A destination write is not a startup VC invalidate.
+  assert(Run(startup,startup_packet)==PacketResult::kBlocked && coher_probes==2);
+  // Complete the suspended wait before publishing another packet to this executor.
+  f.regs[XE_GPU_REG_COHER_STATUS_HOST]=0x81000000;
+  assert(Run(startup,startup_packet)==PacketResult::kConsumed && coher_probes==3);
+  assert(Run(startup,Packet(PM4_DRAW_INDX_2,{0x30088}))==PacketResult::kConsumed);
+  f.regs[XE_GPU_REG_COHER_STATUS_HOST]=0x81000000;
+  assert(Run(startup,startup_packet)==PacketResult::kBlocked && coher_probes==3);
 }
 static void EffectTests() {
   Fixture f; RingExecutor e(f.services());
