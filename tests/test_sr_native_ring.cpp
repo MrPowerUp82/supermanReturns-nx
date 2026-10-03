@@ -130,6 +130,7 @@ struct Fixture {
       assert(a == 0x1000 && w == 1280 && h == 720); ++presents; return true;
     };
     s.cancelled = [this] { return stop; };
+    s.finish_native_work = [] { return PacketResult::kConsumed; }; // Fixture owns no GPU work.
     s.pause_wait = [this] { ++pauses; };
     return s;
   }
@@ -251,11 +252,14 @@ static void BlockedAndMalformedTests() {
   auto run = [&](uint32_t op, std::initializer_list<uint32_t> p) {
     RingExecutor e(f.services()); return Run(e, Packet(op, p));
   };
-  for (auto op : {PM4_EVENT_WRITE_EXT, PM4_EVENT_WRITE_ZPD, PM4_VIZ_QUERY, PM4_WAIT_FOR_IDLE}) {
+  for (auto op : {PM4_EVENT_WRITE_EXT, PM4_EVENT_WRITE_ZPD, PM4_VIZ_QUERY}) {
     assert(run(op, {0, 0}) == PacketResult::kBlocked);
     assert(f.writes == 0);
   }
-  assert(run(PM4_EVENT_WRITE_SHD, {0x80000000, 0x400, 22}) == PacketResult::kBlocked);
+  auto without_completion=f.services();without_completion.finish_native_work={};
+  RingExecutor no_fence(without_completion),no_idle(without_completion);
+  assert(Run(no_fence,Packet(PM4_EVENT_WRITE_SHD,{0x80000000,0x400,22}))==PacketResult::kBlocked);
+  assert(Run(no_idle,Packet(PM4_WAIT_FOR_IDLE,{0}))==PacketResult::kBlocked);
   assert(run(PM4_EVENT_WRITE, {0, 0x100}) == PacketResult::kBlocked);
   RingExecutor e(f.services());
   assert(Run(e, Packet(0x7f, {0})) == PacketResult::kBlocked);
@@ -486,6 +490,88 @@ static void ReplayTests() {
   Cursor replacement_cursor{replacement, 0, uint32_t(replacement.size() / 4), 0};
   assert(generation.ProcessNext(replacement_cursor) == PacketResult::kInvalid && replacement_cursor.position == 0);
 }
+static void NativeFenceTests() {
+  Fixture missing;auto absent=missing.services();absent.finish_native_work={};
+  RingExecutor no_completion(absent);
+  assert(Run(no_completion,Packet(PM4_EVENT_WRITE_SHD,{2,0x402,7}))==PacketResult::kBlocked);
+  assert(missing.writes==0);
+  Fixture f;auto services=f.services();
+  bool ready=false,memory_ready=false;unsigned probes=0;
+  services.finish_native_work=[&] {++probes;return ready?PacketResult::kConsumed:PacketResult::kBlocked;};
+  services.write_memory=[&](uint32_t address,uint32_t value) {
+    if(!memory_ready) return false;
+    ++f.writes;f.memory[address]=value;return true;
+  };
+  RingExecutor executor(services);
+  auto packet=Packet(PM4_EVENT_WRITE_SHD,{0x80000016,0x402,0xdeadbeef});
+  Cursor cursor{packet,0,uint32_t(packet.size()/4),0};
+  assert(executor.ProcessNext(cursor)==PacketResult::kBlocked && f.writes==0 && cursor.position==0);
+  ready=true;
+  assert(executor.ProcessNext(cursor)==PacketResult::kBlocked && f.writes==1 && cursor.position==0);
+  memory_ready=true;
+  assert(executor.ProcessNext(cursor)==PacketResult::kConsumed && f.writes==2 && probes==2);
+  assert(f.memory[0x402]==0); // No completed swap, so the actual SDK swap counter is zero.
+  assert(Run(executor,Packet(PM4_XE_SWAP,{kSwapSignature,0x1000,1280,720}))==PacketResult::kConsumed);
+  assert(Run(executor,packet)==PacketResult::kConsumed && f.memory[0x402]==1);
+  auto idle=Packet(PM4_WAIT_FOR_IDLE,{0});
+  ready=false;
+  assert(Run(executor,idle)==PacketResult::kBlocked);
+  ready=true;
+  assert(Run(executor,idle)==PacketResult::kConsumed);
+}
+static void NativeAssociationTests() {
+  Fixture f;auto services=f.services();
+  bool published=false;unsigned calls=0;std::vector<PacketStamp> observed;
+  services.packet_site=[](uint32_t address,uint32_t,PacketSite& site) {
+    site={7,address};return true;
+  };
+  services.native_packet=[&](const PacketStamp& stamp,bool execute) {
+    ++calls;observed.push_back(stamp);assert(execute);
+    return published?PacketResult::kConsumed:PacketResult::kBlocked;
+  };
+  auto draw=Packet(PM4_DRAW_INDX_2,{0x30088});
+  Cursor root{draw,0,uint32_t(draw.size()/4),0,0x1000};
+  RingExecutor executor(services);
+  assert(executor.ProcessNext(root)==PacketResult::kBlocked && root.position==0 && f.writes==0);
+  published=true;
+  assert(executor.ProcessNext(root)==PacketResult::kConsumed && calls==2);
+  assert(observed[0]==observed[1] && observed[0].site==PacketSite(7,0x1000));
+  assert(observed[0].payload==std::vector<uint32_t>{0x30088});
+  assert(executor.counters().draws_omitted==0);
+  services.native_packet=[&](const PacketStamp&,bool execute) {assert(!execute);return PacketResult::kConsumed;};
+  RingExecutor predicate(services);
+  assert(Run(predicate,Packet(PM4_SET_BIN_MASK,{0,0}))==PacketResult::kConsumed);
+  assert(Run(predicate,Packet(PM4_DRAW_INDX_2,{0x30088},true))==PacketResult::kConsumed);
+  assert(predicate.counters().draws_omitted==0);
+  f.indirects[0x2000]=draw;
+  services.native_packet=[&](const PacketStamp& stamp,bool execute) {
+    assert(execute && stamp.site==PacketSite(7,0x2000));return PacketResult::kConsumed;
+  };
+  RingExecutor indirect(services);
+  assert(Run(indirect,Packet(PM4_INDIRECT_BUFFER,{0x2000,2}))==PacketResult::kConsumed);
+  assert(indirect.counters().draws_omitted==0);
+  // Once the token is accepted, a failed SDK register write cannot enqueue it twice.
+  calls=0;services.native_packet=[&](const PacketStamp&,bool) {++calls;return PacketResult::kConsumed;};
+  RingExecutor retry(services);Cursor retry_cursor{draw,0,2,0,0x1000};
+  f.fail_write=true;
+  assert(retry.ProcessNext(retry_cursor)==PacketResult::kBlocked && calls==1);
+  f.fail_write=false;
+  assert(retry.ProcessNext(retry_cursor)==PacketResult::kConsumed && calls==1);
+  auto missing=services;missing.packet_site={};
+  RingExecutor unavailable(missing);
+  assert(Run(unavailable,draw)==PacketResult::kBlocked && calls==1);
+  // Detect allocation replacement while an indirect snapshot is being copied.
+  uint64_t epoch=7;services.packet_site=[&](uint32_t address,uint32_t,PacketSite& site) {
+    site={epoch,address};return true;
+  };
+  auto copy=services.read_indirect;
+  services.read_indirect=[&](uint32_t address,uint32_t words,std::vector<std::byte>& out) {
+    const bool result=copy(address,words,out);++epoch;return result;
+  };
+  RingExecutor reused(services);auto indirect_packet=Packet(PM4_INDIRECT_BUFFER,{0x2000,2});
+  assert(Run(reused,indirect_packet)==PacketResult::kInvalid && calls==1);
+  assert(Run(reused,indirect_packet)==PacketResult::kInvalid && calls==1);
+}
 static void ReadOnlyAndCapacityTests() {
 #if defined(__linux__)
   {
@@ -564,5 +650,5 @@ int main() {
   ParserTests(); WaitTests(); EffectTests(); BlockedAndMalformedTests(); PredicateTests(); IndirectTests();
   ShaderSafetyTests(); ReplayTests(); ReadOnlyAndCapacityTests();
   DefensiveTests();
-  DrawModeTests();
+  DrawModeTests(); NativeFenceTests(); NativeAssociationTests();
 }

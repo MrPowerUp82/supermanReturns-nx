@@ -443,6 +443,14 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     };
     s.interrupt = [this](uint32_t cpu) { return DeliverInterrupt(1, cpu); };
     s.present = [this](uint32_t a, uint32_t b, uint32_t c) { return Present(a, b, c); };
+    s.finish_native_work=[this] {
+      if(stop_.cancelled()) return PacketResult::kCancelled;
+      // Milestone 1 has no queued guest GPU work before its first draw. Once a
+      // guest draw was omitted, no fence may assert that it rendered/completed.
+      // The actual native queue's last recognized serial replaces this guard
+      // when execution is integrated; future captured commands are not waited on.
+      return guest_draws_seen_?PacketResult::kBlocked:PacketResult::kConsumed;
+    };
     s.startup_vertex_coherence = [this](uint32_t status,uint32_t base,uint32_t size) {
       // Before the first guest draw there are no native guest vertex buffers or
       // queued guest GPU work to invalidate. The presenter uses private images.
@@ -610,12 +618,12 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       }
       seen_write = write;
       Cursor cursor{std::span<const std::byte>(physical_->Host(snapshot.base), size_t(snapshot.words) * 4),
-                    ring.read_word, write & (snapshot.words - 1), snapshot.words - 1};
+                    ring.read_word, write & (snapshot.words - 1), snapshot.words - 1,snapshot.base};
       active_cursor_ = &cursor;
       PacketResult result;
       for (;;) {
         result = executor->ProcessNext(cursor);
-        if (executor->counters().draws_omitted) guest_draws_seen_=true;
+        if (executor->counters().draws_omitted || executor->counters().native_work_accepted) guest_draws_seen_=true;
         if (result != PacketResult::kConsumed) break;
         RecordNativeProgress();
       }

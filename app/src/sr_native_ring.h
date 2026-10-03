@@ -1,4 +1,5 @@
 #pragma once
+#include "sr_native_commands.h"
 
 #include <array>
 #include <cstddef>
@@ -15,6 +16,7 @@ struct Cursor {
   uint32_t position = 0;
   uint32_t end = 0;
   uint32_t mask = 0;  // Ring capacity minus one, in words; zero for a linear buffer.
+  uint32_t physical_base = 0;
 };
 struct PacketView {
   uint32_t header = 0;
@@ -47,6 +49,14 @@ struct Services {
   // Only the initial VC-only invalidate before any guest draw. True requires
   // that the adapter actually acknowledge it; never completes GPU work/fences.
   std::function<bool(uint32_t, uint32_t, uint32_t)> startup_vertex_coherence;
+  // The adapter waits only for native work already recognized at this CP point.
+  // Consumed proves completion; blocked/cancelled must not publish a fence write.
+  std::function<PacketResult()> finish_native_work;
+  // Supplied by the allocation registry, never inferred from packet contents.
+  std::function<bool(uint32_t, uint32_t, PacketSite&)> packet_site;
+  // Consumed accepts the immutable token once. execute=false acknowledges a
+  // predicated token without submitting its operation to the GPU.
+  std::function<PacketResult(const PacketStamp&, bool execute)> native_packet;
   std::function<bool()> cancelled;
   // Short, cancellable adapter pause between false wait probes.
   std::function<void()> pause_wait;
@@ -61,6 +71,7 @@ struct RingCounters {
   // Address is a ring byte offset or a physical address inside an indirect.
   uint32_t last_blocked_opcode = 0, last_blocked_address = 0;
   uint64_t draws_shader_blocked = 0;
+  uint64_t native_work_accepted = 0;
 };
 // A refresh that failed or was refused is not counted: refresh_completed is a submitted-and-
 // finished clear/refresh, not frames shown (surface paints are counted by the presenter).
@@ -78,16 +89,20 @@ class RingExecutor {
   struct PendingPacket {
     PacketView packet;
     bool loaded = false, child_started = false, prepared = false;
+    bool native_accepted = false;
+    PacketStamp stamp;
     size_t effect = 0;
     std::vector<uint32_t> values;
   };
   struct IndirectFrame {
     uint32_t address = 0;
+    uint64_t allocation_epoch = 0;
     std::vector<std::byte> storage;
     Cursor cursor;
     PendingPacket pending;
   };
   PacketResult Execute(const PacketView&, uint32_t depth);
+  PacketResult LoadPacket(const Cursor&, PendingPacket&, uint32_t address);
   bool Read(bool memory, uint32_t address, uint32_t& value);
   bool Write(bool memory, uint32_t address, uint32_t value);
   PacketResult WriteValues(bool memory, uint32_t address, uint32_t stride,
@@ -104,5 +119,6 @@ class RingExecutor {
   const std::byte* root_data_ = nullptr;
   size_t root_size_ = 0;
   uint32_t root_position_ = 0, root_mask_ = 0;
+  uint32_t root_physical_base_ = 0;
 };
 }  // namespace sr::native

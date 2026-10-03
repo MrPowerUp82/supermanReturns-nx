@@ -1,4 +1,5 @@
 #include "sr_native_bridge.h"
+#include <algorithm>
 #include "sr_native_profile.h"
 #include <cassert>
 #include <bit>

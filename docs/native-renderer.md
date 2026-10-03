@@ -165,6 +165,29 @@ canonical physical memory instead of treating the A000 virtual alias as allocati
 authority. It acknowledges only the initial vertex-cache invalidate while no guest draw
 or guest GPU work has occurred; destination coherency and waits after a draw remain
 blocked until the resource/serial backend exists. Host regressions and the Switch cross
-link pass; this follow-up still needs a console run. At the user's request, deployment is
+link pass. At the user's request, deployment is
 directly `/switch/superman-returns-nx/superman_returns.nro`, with configuration and shader
 pack beside it, using FTP `192.168.1.75:5000`. No capture subfolder is used on the SD.
+
+The fresh fix5 console run (`superman_returns_003.log`, SHA-256
+`9d4f675c134a67d564cf353dc162fccb2cf6f21c76ffc2b11a13e76c0eea002b`)
+acknowledges the startup vertex-cache invalidation and captures 54 operations,
+including draw packets and physical shader loads, without capture rejection.
+The next blocker is EVENT_WRITE_SHD (`0x58`) at physical `0x1F4D003C`.
+Completed swaps and gameplay frames remain zero. The observed black screen is
+therefore still a blocked native run.
+
+Queue and association foundations now have host regressions for bounded
+in-flight snapshot memory, cancellation, serial gaps, physical packet locations,
+predicated tokens and accepted-token retries after failed SDK register writes.
+Allocation epochs are supplied through an explicit registry callback; they are
+checked around packet/indirect copies and cached with owned words for retries.
+The live allocation registry and GPU executor are not wired yet, so these
+association callbacks remain disabled in NativeSystem. Tasks 5 and 6 are unfinished.
+
+EVENT_WRITE_SHD and WAIT_FOR_IDLE require an explicit completion callback.
+The current milestone can acknowledge that no guest GPU work exists before its
+first draw; once any draw was omitted or native work accepted, the callback
+blocks until a real executor can prove completion. The SHD counter uses completed
+swaps rather than vblank, freezes its value across write retries and does not
+publish a fence when the completion callback is missing, blocked or cancelled.
