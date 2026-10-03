@@ -16,7 +16,8 @@ struct CaptureCall {
 class NativeCaptureBridge {
  public:
   using PhysicalAddress = std::function<bool(GuestAddress,uint32_t&)>;
-  NativeCaptureBridge(const GuestMemory&, PhysicalAddress);
+  using ScanFailure = std::function<void(NativeResult,PacketSite,std::span<const std::byte>)>;
+  NativeCaptureBridge(const GuestMemory&, PhysicalAddress, ScanFailure = {});
   void SetEnabled(bool enabled);
   CaptureCall BeginCall(CommandKind, GuestAddress);
   void SetPayload(const CaptureCall&, const CommandPayload&);
@@ -30,6 +31,7 @@ class NativeCaptureBridge {
   NativeResult Sync(GuestAddress);
   const GuestMemory& memory_;
   PhysicalAddress physical_;
+  ScanFailure scan_failure_;
   StateMirror mirror_;
   GuestAddress cursor_ = 0, device_ = 0;
   uint64_t epoch_ = 1, next_id_ = 1, frame_ = 0;

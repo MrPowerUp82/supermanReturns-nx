@@ -165,9 +165,16 @@ static void WaitTests() {
   assert(Run(cancelled, Packet(PM4_WAIT_REG_MEM, {0x13, 0x103, 1, ~0u, 0x100})) == PacketResult::kCancelled);
   assert(f.pauses == 1001 && f.memory.at(0x103) == 0 && cancelled.counters().packets == 0);
   f.stop = false; f.regs[XE_GPU_REG_COHER_STATUS_HOST] = 0x80000000;
-  RingExecutor coher(f.services());
+  auto coher_services=f.services();
+  unsigned dirty_reports=0;
+  coher_services.report_wait=[&](uint32_t info,uint32_t address,uint32_t ref,uint32_t mask) {
+    assert(info==3 && address==XE_GPU_REG_COHER_STATUS_HOST && ref==0 && mask==~0u);
+    ++dirty_reports;
+  };
+  RingExecutor coher(coher_services);
   assert(Run(coher, Packet(PM4_WAIT_REG_MEM, {3, XE_GPU_REG_COHER_STATUS_HOST, 0, ~0u, 0})) == PacketResult::kBlocked);
   assert(f.regs[XE_GPU_REG_COHER_STATUS_HOST] == 0x80000000 && f.writes == 0);
+  assert(dirty_reports==1);
 }
 static void EffectTests() {
   Fixture f; RingExecutor e(f.services());

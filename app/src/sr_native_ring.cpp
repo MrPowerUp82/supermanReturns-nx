@@ -253,8 +253,11 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       for (;;) {
         if (services_.cancelled && services_.cancelled()) return kCancelled;
         uint32_t value = 0;
-        if (!Read(p[0] & 0x10, p[1], value)) return kBlocked;
-        if (!(p[0] & 0x10) && p[1] == XE_GPU_REG_COHER_STATUS_HOST && (value & 0x80000000u)) return kBlocked;
+        if (!Read(p[0] & 0x10, p[1], value) ||
+            (!(p[0] & 0x10) && p[1] == XE_GPU_REG_COHER_STATUS_HOST && (value & 0x80000000u))) {
+          if (services_.report_wait) services_.report_wait(p[0],p[1],p[2],p[3]);
+          return kBlocked;
+        }
         if (CompareWait(p[0], value, p[2], p[3])) return kConsumed;
         if (services_.report_wait) services_.report_wait(p[0], p[1], p[2], p[3]);
         if (!services_.pause_wait) return kBlocked;

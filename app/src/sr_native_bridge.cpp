@@ -6,8 +6,10 @@
 #include <utility>
 
 namespace sr::native {
-NativeCaptureBridge::NativeCaptureBridge(const GuestMemory& memory, PhysicalAddress physical)
-    : memory_(memory), physical_(std::move(physical)) { mirror_.ResetSegment(epoch_); }
+NativeCaptureBridge::NativeCaptureBridge(const GuestMemory& memory, PhysicalAddress physical, ScanFailure scan_failure)
+    : memory_(memory), physical_(std::move(physical)), scan_failure_(std::move(scan_failure)) {
+  mirror_.ResetSegment(epoch_);
+}
 void NativeCaptureBridge::SetEnabled(bool enabled) {
   if (enabled_ == enabled) return;
   enabled_=enabled; cursor_=0; device_=0; depth_=0; scope_stamps_.clear();
@@ -29,7 +31,10 @@ NativeResult NativeCaptureBridge::Sync(GuestAddress device) {
   if (!physical_ || !physical_(cursor_,physical) || !memory_.Copy(cursor_,end-cursor_,bytes))
     return NativeResult::kInvalid;
   auto result=mirror_.Scan(memory_,bytes,{epoch_,physical});
-  if (result!=NativeResult::kComplete) return result;
+  if (result!=NativeResult::kComplete) {
+    if (scan_failure_) scan_failure_(result,{epoch_,physical},bytes);
+    return result;
+  }
   if (depth_) scope_stamps_.insert(scope_stamps_.end(),mirror_.Stamps().begin(),mirror_.Stamps().end());
   cursor_=end;
   return NativeResult::kComplete;

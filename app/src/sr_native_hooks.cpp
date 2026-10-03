@@ -1,6 +1,7 @@
 // Independently authored hooks against verified Superman XDK/PPC ABI facts.
 // Capture is opt-in and executes no GPU work. Each original is called exactly once.
 #include "sr_native_bridge.h"
+#include "sr_native_ring.h"
 #include "sr_shader_registry.h"
 #include "generated/default/superman_returns_init.h"
 #include <rex/cvar.h>
@@ -42,6 +43,27 @@ bool ValidGuest(uint32_t address,uint32_t size,bool write) {
   }
   return true;
 }
+void ReportRejectedScan(NativeResult result,PacketSite site,std::span<const std::byte> bytes) {
+  static std::atomic<unsigned> failures{0};
+  if (++failures>4) return;
+  REXLOG_WARN("[sr-capture] rejected-segment result={} epoch={} physical={:08X} bytes={}",
+    uint32_t(result),site.allocation_epoch,site.physical_address,bytes.size());
+  Cursor cursor{bytes,0,uint32_t(bytes.size()/4),0};
+  for (unsigned count=0;cursor.position<cursor.end && count<128;++count) {
+    PacketView packet;
+    const auto parsed=PeekPacket(cursor,packet);
+    if (parsed!=PacketResult::kConsumed) {
+      REXLOG_WARN("[sr-capture] malformed-packet physical={:08X} result={} remaining_words={}",
+        site.physical_address+cursor.position*4,uint32_t(parsed),cursor.end-cursor.position);
+      break;
+    }
+    const auto& p=packet.payload;
+    REXLOG_WARN("[sr-capture] rejected-packet physical={:08X} header={:08X} words={} first={:08X} {:08X} {:08X} {:08X}",
+      site.physical_address+cursor.position*4,packet.header,p.size(),
+      p.size()>0?p[0]:0,p.size()>1?p[1]:0,p.size()>2?p[2]:0,p.size()>3?p[3]:0);
+    CommitPacket(cursor,packet);
+  }
+}
 struct HookContext {
   GuestMemory memory{{ValidGuest,
     [](uint32_t a,std::span<std::byte> out) {
@@ -55,7 +77,7 @@ struct HookContext {
   NativeCaptureBridge bridge{memory,[](uint32_t a,uint32_t& physical) {
     auto* memory=LiveMemory(); if (!memory) return false;
     physical=memory->GetPhysicalAddress(a);return physical<0x20000000;
-  }};
+  },ReportRejectedScan};
   CaptureCall inline_call;
   DrawPayload inline_draw;
   uint32_t inline_pointer=0;

@@ -684,8 +684,13 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       return;
     }
     it->second = now;
-    REXLOG_WARN("[sr-native] WAIT pending info={:08X} address={:08X} reference={:08X} mask={:08X}", info,
-                address, reference, mask);
+    uint32_t value=0;
+    const bool readable=(info&0x10) ? physical_->ReadWord(address,value) : ReadRegister(address,value);
+    uint32_t coher_base=0,coher_size=0;
+    ReadRegister(rex::graphics::XE_GPU_REG_COHER_BASE_HOST,coher_base);
+    ReadRegister(rex::graphics::XE_GPU_REG_COHER_SIZE_HOST,coher_size);
+    REXLOG_WARN("[sr-native] WAIT pending info={:08X} address={:08X} reference={:08X} mask={:08X} readable={} value={:08X} coher_base={:08X} coher_size={:08X}", info,
+                address, reference, mask,readable,value,coher_base,coher_size);
   }
 
   void MaybeReport() {

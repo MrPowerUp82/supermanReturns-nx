@@ -77,5 +77,25 @@ int main() {
   original();
   assert(bridge.EndCall(call,memory,cmd)==NativeResult::kCancelled);
   assert(originals==2);
+  // Preserve the rejected segment for diagnostics without consuming its cursor.
+  unsigned rejected=0;
+  std::vector<std::byte> rejected_bytes;
+  NativeCaptureBridge diagnostic(memory,[](uint32_t a,uint32_t& p){p=a;return true;},
+    [&](NativeResult result,PacketSite site,std::span<const std::byte> bytes) {
+      assert(result==NativeResult::kInvalid && site.physical_address==new_ring);
+      rejected_bytes.assign(bytes.begin(),bytes.end());++rejected;
+    });
+  put(dev+profile::kDevice.ring_write,new_ring-4);
+  diagnostic.SetEnabled(true);
+  call=diagnostic.BeginCall(CommandKind::kDraw,dev);
+  put(new_ring,0xC0012200);put(new_ring+4,0); // Missing final payload word.
+  put(dev+profile::kDevice.ring_write,new_ring+4);
+  assert(diagnostic.EndCall(call,memory,cmd)==NativeResult::kInvalid);
+  assert(rejected==1 && rejected_bytes.size()==8);
+  put(new_ring+8,0x30004);put(dev+profile::kDevice.ring_write,new_ring+8);
+  call=diagnostic.BeginCall(CommandKind::kDraw,dev);
+  assert(call.result==NativeResult::kComplete);
+  assert(diagnostic.EndCall(call,memory,cmd)==NativeResult::kComplete);
+  assert(rejected==1 && rejected_bytes.size()==8);
   std::puts("hook bridge: nested capture, copied arguments and float clear passed");
 }
