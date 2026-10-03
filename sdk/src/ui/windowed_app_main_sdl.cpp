@@ -11,9 +11,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#if defined(__SWITCH__)
-#include <cstdio>
-#endif
 #include <map>
 #include <memory>
 #include <string>
@@ -39,38 +36,17 @@
 
 namespace {
 
-#if defined(__SWITCH__)
-// The regular file logger is initialized after SDL and application creation.
-// Keep a synchronous boot breadcrumb so failures before that point leave evidence.
-void SwitchBootTrace(const char* stage, int argc = 0, char** argv = nullptr) {
-  FILE* trace = std::fopen("sdmc:/switch/superman-returns-nx/native-boot.log", "a");
-  if (!trace) return;
-  std::fprintf(trace, "[boot] %s", stage);
-  if (argv && argc > 0 && argv[0]) std::fprintf(trace, " argv0=%s", argv[0]);
-  std::fputc('\n', trace);
-  std::fclose(trace);
-}
-#else
-void SwitchBootTrace(const char*, int = 0, char** = nullptr) {}
-#endif
-
 int RunWindowedApp(int argc, char** argv) {
-  SwitchBootTrace("main entered", argc, argv);
   auto remaining = rex::cvar::Init(argc, argv);
-  SwitchBootTrace("cvars initialized");
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();
-  SwitchBootTrace("early logging initialized");
 
   int result;
   {
     rex::ui::SDLWindowedAppContext app_context;
-    SwitchBootTrace("SDL context initializing");
     if (!app_context.Initialize()) {
-      SwitchBootTrace("SDL context initialization failed");
       return EXIT_FAILURE;
     }
-    SwitchBootTrace("SDL context initialized");
 
 #if REX_PLATFORM_WIN32
     // Apartment-threaded COM for shell dialogs.
@@ -80,7 +56,6 @@ int RunWindowedApp(int argc, char** argv) {
 #endif
 
     std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
-    SwitchBootTrace("application created");
 
     // Match remaining positional args to the app's expected options.
     const auto& option_names = app->GetPositionalOptions();
@@ -91,15 +66,7 @@ int RunWindowedApp(int argc, char** argv) {
     }
     app->SetParsedArguments(std::move(parsed));
 
-    SwitchBootTrace("application initializing");
-    if (app->OnInitialize()) {
-      SwitchBootTrace("application initialized; message loop entering");
-      result = app_context.RunMainMessageLoop();
-      SwitchBootTrace("message loop exited");
-    } else {
-      SwitchBootTrace("application initialization failed");
-      result = EXIT_FAILURE;
-    }
+    result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
 
     app->InvokeOnDestroy();
   }
