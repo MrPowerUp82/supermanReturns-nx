@@ -3,6 +3,62 @@
 #include <fstream>
 #include <stdexcept>
 
+static void EmptyTableTranslation() {
+    std::vector<uint8_t> data(96 + 4096);
+    const auto put = [&](size_t at, uint32_t value) {
+        for (size_t i=0;i<4;++i) data[at+i]=uint8_t(value>>(24-i*8));
+    };
+    put(0,0x102a1101); put(4,72); put(8,24); put(24,36);
+    put(36,0); put(40,24); put(72,0x1001); put(76,0x2000);
+    ShaderRecompiler compiler;
+    compiler.recompile(data.data(), "");
+    if (compiler.out.find("void main(") == std::string::npos)
+        throw std::runtime_error("minimal shader with no CTAB did not translate");
+    if (compiler.out.find("iVertexId : SV_VertexID")==std::string::npos ||
+        compiler.out.find("float(iVertexId & 0xFFFFFFu)")==std::string::npos)
+        throw std::runtime_error("vertex entry r0 does not contain guest vertex index");
+}
+
+static void VertexInputsTranslation() {
+    std::vector<uint8_t> data(128 + 4096);
+    const auto put = [&](size_t at, uint32_t value) {
+        for (size_t i=0;i<4;++i) data[at+i]=uint8_t(value>>(24-i*8));
+    };
+    put(0,0x102a1101); put(4,104); put(8,24); put(24,36);
+    put(36,0); put(40,24); put(64,4);
+    // Two fetch addresses share POSITION0; NORMAL1 still needs a location.
+    put(72,0); put(76,1); put(80,2 | (3u<<12) | (1u<<16));
+    put(84,3 | (5u<<12)); put(104,0x1001); put(108,0x2000);
+    ShaderRecompiler compiler;
+    compiler.recompile(data.data(), "");
+    const auto& out=compiler.out;
+    const std::string position="in float4 iPosition0 : POSITION0,";
+    auto first=out.find(position);
+    if (first==std::string::npos || out.find(position, first+1)!=std::string::npos)
+        throw std::runtime_error("repeated vertex fetch emits duplicate parameter");
+    if (out.find("[[vk::location(16)]] in float4 iNormal1 : NORMAL1,")==std::string::npos)
+        throw std::runtime_error("NORMAL1 has no explicit location");
+    if (compiler.vertexElements.size()!=4)
+        throw std::runtime_error("deduplication lost a fetch address");
+}
+
+static void ParallelAluTranslation() {
+    AluInstruction instruction{};
+    instruction.vectorOpcode=AluVectorOpcode::Add;
+    instruction.vectorWriteMask=15;
+    instruction.vectorDest=0;
+    instruction.scalarOpcode=AluScalarOpcode::Adds;
+    instruction.scalarWriteMask=1;
+    instruction.src1Select=instruction.src2Select=instruction.src3Select=1;
+    instruction.src3Register=0;
+    ShaderRecompiler compiler;
+    compiler.recompile(instruction);
+    const auto& out=compiler.out;
+    if (out.find("float4 aluVectorSource = r0;")==std::string::npos ||
+        out.find("aluVectorSource.")==std::string::npos)
+        throw std::runtime_error("scalar lane reads vector destination after overwrite");
+}
+
 static std::string Translate(AluInstruction instruction, bool declared = false) {
     ShaderRecompiler compiler;
     const char name[] = "Directions";
@@ -24,6 +80,9 @@ static void Expect(const std::string& output, const char* expected) {
 
 int main(int argc, char** argv) try {
     if (argc != 2) throw std::runtime_error("usage: test_cube <new HLSL output>");
+    EmptyTableTranslation();
+    VertexInputsTranslation();
+    ParallelAluTranslation();
     AluInstruction instruction{};
     instruction.vectorOpcode = AluVectorOpcode::Cube;
     instruction.scalarOpcode = AluScalarOpcode::RetainPrev;

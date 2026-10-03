@@ -20,7 +20,12 @@ GAME=${2:?missing game folder}
 shift 2
 
 [ -e "$OUT" ] && { echo "Output folder already exists"; exit 1; }
+"$DXC" --version >/dev/null || { echo "DXC is missing or cannot run on this host"; exit 1; }
+"$VAL" --version >/dev/null || { echo "SPIR-V validator is missing or cannot run"; exit 1; }
 mkdir -p "$OUT/bin" "$OUT/hlsl" "$OUT/spirv"
+"$DXC" --version > "$OUT/toolchain.log"
+"$VAL" --version >> "$OUT/toolchain.log"
+sha256sum "$ROOT/XenosRecomp/shader_recompiler.cpp" "$ROOT/XenosRecomp/shader_common.h" >> "$OUT/toolchain.log"
 INC=(-I"$ROOT" -I"$ROOT/XenosRecomp" -I"$SDK/thirdparty/fmt/include" -I"$SDK/thirdparty/xxHash")
 $CXX -std=c++23 -O2 "${INC[@]}" "$ROOT/sr_find_containers.cpp" -o "$OUT/bin/sr_find_containers"
 $CXX -std=c++23 -O1 "${INC[@]}" -include "$ROOT/pch_min.h" -DFMT_HEADER_ONLY -DXXH_INLINE_ALL -DNFSMW_RECOMP \
@@ -29,7 +34,15 @@ $CXX -std=c++23 -O1 "${INC[@]}" -include "$ROOT/pch_min.h" -DFMT_HEADER_ONLY -DX
 $CXX -std=c++23 -O2 "${INC[@]}" "$ROOT/sr_pack.cpp" "$ROOT/../app/src/sr_shader_library.cpp" \
   -o "$OUT/bin/sr_pack"
 
-"$OUT/bin/sr_find_containers" "$GAME" "$OUT/containers" "$@" > "$OUT/scan.log"
+if [[ -n "${SR_CONTAINER_DIR:-}" ]]; then
+  # Locally imported/validated runtime corpus, already deduplicated by content.
+  # Still validate each container in sr_hlsl before translating.
+  mkdir "$OUT/containers"
+  cp -- "$SR_CONTAINER_DIR"/*.bin "$OUT/containers/"
+  printf 'Imported runtime corpus from %s\n' "$SR_CONTAINER_DIR" > "$OUT/scan.log"
+else
+  "$OUT/bin/sr_find_containers" "$GAME" "$OUT/containers" "$@" > "$OUT/scan.log"
+fi
 tail -1 "$OUT/scan.log"
 "$OUT/bin/sr_hlsl" "$OUT/containers" "$OUT/hlsl" "$ROOT/XenosRecomp/shader_common.h" > "$OUT/translate.log" \
   || { tail -5 "$OUT/translate.log"; echo "Some shaders were not translated; see translate.log"; exit 1; }

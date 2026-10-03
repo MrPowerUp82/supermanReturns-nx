@@ -43,6 +43,24 @@ class SupermanReturnsApp : public rex::ReXApp {
     paths.config_path = folder / "superman_returns.toml";
   }
 
+  std::optional<rex::PathConfig> OnFinalizePaths(const rex::PathConfig& defaults,
+      std::function<void(rex::PathConfig)> resume) override {
+    (void)resume;
+    auto paths=defaults;
+    // SetupEnvironment loads TOML after OnConfigurePaths. Apply its explicit
+    // paths here so an isolated capture folder can use the existing game data.
+    const auto apply=[](const char* flag,std::filesystem::path& path) {
+      const auto value=rex::cvar::GetFlagByName(flag);
+      if (!value.empty()) path=value;
+    };
+    apply("game_data_root",paths.game_data_root);
+    apply("user_data_root",paths.user_data_root);
+    apply("update_data_root",paths.update_data_root);
+    apply("cache_root",paths.cache_root);
+    apply("metadata_root",paths.metadata_root);
+    return paths;
+  }
+
   // The renderer is chosen once per run: no switching at runtime and no per-draw fallback.
   // An invalid value makes native setup fail (the SDK treats a failed presentation setup as
   // fatal) instead of silently running Xenos.
@@ -90,7 +108,8 @@ class SupermanReturnsApp : public rex::ReXApp {
     // NFSMW's IO range cache has not been profiled with Superman's AST files.
     SetDefault("nfsmw_io_rangos_mb", "0");
 #endif
-    REXLOG_INFO("Superman Returns NX: experimental Vulkan/Xenos boot build");
+    REXLOG_INFO("Superman Returns NX: experimental build; requested renderer={}",
+                rex::cvar::GetFlagByName("sr_renderer"));
     // Drawing with the offline shader pack needs the device features its SPIR-V
     // declares (64-bit integers, buffer addresses, descriptor arrays); they are
     // chosen when the Vulkan device is created, after this point.

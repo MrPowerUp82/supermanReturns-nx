@@ -29,6 +29,17 @@ NX_NORETURN void __libnx_exit(int rc);
 
 namespace {
 
+// This file logger precedes application construction and the regular logger.
+// Each close flushes the breadcrumb even if initialization exits immediately.
+void BootTrace(const char* stage, int argc = 0, char** argv = nullptr) {
+  FILE* trace = std::fopen("sdmc:/switch/superman-returns-nx/native-boot.log", "a");
+  if (!trace) return;
+  std::fprintf(trace, "[boot] %s", stage);
+  if (argv && argc > 0 && argv[0]) std::fprintf(trace, " argv0=%s", argv[0]);
+  std::fputc('\n', trace);
+  std::fclose(trace);
+}
+
 // Returning from main is not a clean exit for this runtime on Switch. libnx
 // never runs .fini_array, so static destructors do not run, and any thread
 // owned by a global object (the TimerQueue dispatcher, and in a title the
@@ -58,6 +69,7 @@ namespace {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  BootTrace("main entered", argc, argv);
   static char default_argv0[] = "sdmc:/switch/superman-returns-nx/superman_returns.nro";
   static char* default_argv[] = {default_argv0, nullptr};
   if (argc <= 0 || argv == nullptr) {
@@ -66,17 +78,23 @@ int main(int argc, char* argv[]) {
   }
 
   auto remaining = rex::cvar::Init(argc, argv);
+  BootTrace("cvars initialized");
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();
+  BootTrace("early logging initialized");
 
   int result;
   {
     rex::ui::SwitchWindowedAppContext app_context;
+    BootTrace("Switch context initializing");
     if (!app_context.Initialize()) {
+      BootTrace("Switch context initialization failed");
       ExitProcess(EXIT_FAILURE);
     }
+    BootTrace("Switch context initialized");
 
     std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
+    BootTrace("application created");
 
     // Match remaining positional args to the app's expected options.
     const auto& option_names = app->GetPositionalOptions();
@@ -87,11 +105,14 @@ int main(int argc, char* argv[]) {
     }
     app->SetParsedArguments(std::move(parsed));
 
+    BootTrace("application initializing");
     const bool initialized = app->OnInitialize();
+    BootTrace(initialized ? "application initialized" : "application initialization failed");
     if (!initialized) {
       REXLOG_ERROR("Switch: app initialization failed");
     }
     result = initialized ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
+    BootTrace("message loop finished");
 
     app->InvokeOnDestroy();
   }

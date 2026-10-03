@@ -12,6 +12,13 @@ game code are included in the source repository. See `docs/provenance.json`.
 
 ## Native renderer (adapted from nfsmw-nx)
 
+The gameplay continuation records Superman XDK addresses and layout facts from
+the local `superman_returns_recomp` revision
+`257feabc050e03c287fdf6238bf55876e5b59d81`. `sr_native_profile.h` and
+`sr_native_guest.*` are newly written declarations and checked-access code;
+no native-kit implementation is imported by these files. Generated game code,
+containers and translated game shaders remain local and are not distributed.
+
 `app/src/sr_native_*` adapt the native graphics system of [StevensND/nfsmw-nx](https://github.com/StevensND/nfsmw-nx) (`app/src/nfsmw_nativo_sistema.*`, revision `df2de32ee569873062b8f8d1da8ad0b8d0a90a5d`, licensed GPL-3.0): the MMIO ranges, ring worker, vblank worker, interrupt delivery and the Vulkan clear route. The PM4 parser/executor, memory validation, shader proof and lifecycle helpers are new code in this repository, written against that behavior and the SDK. NFSMW-specific hooks, addresses, the shader library and scene paths were not imported. That reference has no per-file license headers; the repository license applies. Details in [docs/native-renderer.md](docs/native-renderer.md).
 
 The upstream notices below are retained verbatim for attribution; references

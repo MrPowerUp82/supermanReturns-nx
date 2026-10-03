@@ -1,6 +1,7 @@
 #include "shader_recompiler.h"
 #include "shader_common.h"
 #include <stdexcept>
+#include <set>
 
 static constexpr char SWIZZLES[] = 
 { 
@@ -104,6 +105,7 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
     { DeclUsage::TexCoord, 6, 14 },
     { DeclUsage::TexCoord, 7, 15 },
     { DeclUsage::Position, 1, 15 },
+    { DeclUsage::Normal, 1, 16 },
 };
 
 static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
@@ -399,6 +401,20 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         cerrarPredicado();
     const size_t marcaPredicado = out.size();
 
+    // Both lanes evaluate their operands from the instruction's entry state.
+    // RetainPrev emits no scalar expression, so it needs no saved source.
+    const bool parallelLanes = instr.scalarOpcode != AluScalarOpcode::RetainPrev &&
+                               instr.vectorWriteMask != 0;
+    if (parallelLanes)
+    {
+        indent(); out += "{\n"; ++indentation;
+        if (!instr.exportData)
+        {
+            indent(); println("float4 aluVectorSource = r{};", instr.vectorDest);
+        }
+        indent(); out += "int aluAddress = a0;\n";
+    }
+
     enum
     {
         VECTOR_0,
@@ -479,6 +495,8 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             if (select)
             {
                 regFormatted = fmt::format("r{}", reg);
+                if (parallelLanes && !instr.exportData && operand >= SCALAR_0 && reg == instr.vectorDest)
+                    regFormatted = "aluVectorSource";
             }
             else
             {
@@ -503,7 +521,8 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                     #endif
                         {
                             regFormatted = fmt::format("{}({}{})", constantName,
-                                reg - findResult->second->registerIndex, relativa ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
+                                reg - findResult->second->registerIndex, relativa ? (instr.constAddressRegisterRelative ?
+                                    (parallelLanes && operand >= SCALAR_0 ? " + aluAddress" : " + a0") : " + aL") : "");
                         }
                     }
                     else
@@ -1163,6 +1182,10 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         out += "}\n";
     }
 
+    if (parallelLanes)
+    {
+        --indentation; indent(); out += "}\n";
+    }
     cerrarSiEscribePredicado(marcaPredicado);
 }
 
@@ -1175,14 +1198,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
      * Both are accepted: only the two high bytes are compared.
      */
     assert((shaderContainer->flags & 0xFFFF0000) == 0x102A0000);
-    assert(shaderContainer->constantTableOffset != NULL);
 
     out += include;
     out += '\n';
 
     isPixelShader = (shaderContainer->flags & 0x1) == 0;
 
-    const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
+    // Runtime-generated clear/copy shaders may omit CTAB. Keep a correctly
+    // aligned typed empty table rather than dereferencing offset zero.
+    static const ConstantTableContainer emptyTable{};
+    const auto constantTableContainer = shaderContainer->constantTableOffset != 0
+        ? reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset)
+        : &emptyTable;
     constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
 
     out += "#ifdef __spirv__\n\n";
@@ -1401,6 +1428,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
     else
     {
         auto vertexShader = reinterpret_cast<const VertexShader*>(shader);
+        std::set<uint32_t> declaredInputs;
         for (uint32_t i = 0; i < vertexShader->vertexElementCount; i++)
         {
             union
@@ -1410,6 +1438,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             };
 
             value = vertexShader->vertexElementsAndInterpolators[vertexShader->field18 + i];
+
+            // The table describes fetch instructions, not unique attributes.
+            // Preserve every instruction address while declaring each semantic once.
+            auto [fetch, inserted] = vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
+            if (!inserted && (fetch->second.usage != vertexElement.usage ||
+                              fetch->second.usageIndex != vertexElement.usageIndex))
+                throw std::runtime_error("conflicting vertex semantics at one fetch address");
+            const uint32_t semantic = uint32_t(vertexElement.usage) * 16 + vertexElement.usageIndex;
+            if (!declaredInputs.insert(semantic).second)
+                continue;
+            if (uint32_t(vertexElement.usage) >= std::size(USAGE_TYPES))
+                throw std::runtime_error("unsupported vertex semantic");
 
             const char* usageType = USAGE_TYPES[uint32_t(vertexElement.usage)];
 
@@ -1422,22 +1462,27 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         #endif
 
             out += '\t';
-
+            bool locatedInput = false;
             for (auto& usageLocation : USAGE_LOCATIONS)
             {
                 if (usageLocation.usage == vertexElement.usage && usageLocation.usageIndex == vertexElement.usageIndex)
                 {
                     print("[[vk::location({})]] ", usageLocation.location);
+                    locatedInput = true;
                     break;
                 }
             }
+            if (!locatedInput)
+                throw std::runtime_error("vertex semantic has no Vulkan location");
 
             println("in {0} i{1}{2} : {3}{2},", usageType, USAGE_VARIABLES[uint32_t(vertexElement.usage)],
                 uint32_t(vertexElement.usageIndex), USAGE_SEMANTICS[uint32_t(vertexElement.usage)]);
 
-            vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
         }
 
+    #ifdef NFSMW_RECOMP
+        out += "\tin uint iVertexId : SV_VertexID,\n";
+    #endif
     #ifdef UNLEASHED_RECOMP
         if (hasIndexCount)
         {
@@ -1571,7 +1616,12 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         #endif
             else
             {
-                out += "0.0;\n";
+            #ifdef NFSMW_RECOMP
+                if (!isPixelShader && i == 0)
+                    out += "float4(float(iVertexId & 0xFFFFFFu), 0.0f, 0.0f, 0.0f);\n";
+                else
+            #endif
+                    out += "0.0;\n";
             }
         }
     }

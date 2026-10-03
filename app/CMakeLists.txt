@@ -18,10 +18,19 @@ if(NOT SR_MANIFEST_HASH STREQUAL SR_CODEGEN_HASH)
 endif()
 include(cmake/rexglue.cmake)
 
+if(REXGLUE_PLATFORM_SWITCH)
+    # This large table registers symbols once at boot. GCC -O3 spends minutes
+    # optimizing the registration block; it is not part of the game hot path.
+    set_source_files_properties(generated/default/superman_returns_register.cpp
+        PROPERTIES COMPILE_OPTIONS "-O0")
+endif()
+
 set(SR_SOURCES src/main.cpp src/sr_settings.cpp src/xma_fixes.cpp src/skip_intro.cpp
     src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp
     src/sr_native_ring.cpp src/sr_native_shader_safety.cpp src/sr_native_present.cpp
-    src/sr_native_system.cpp)
+    src/sr_native_system.cpp src/sr_native_guest.cpp src/sr_native_capture.cpp
+    src/sr_native_mirror.cpp src/sr_native_bridge.cpp src/sr_native_hooks.cpp
+    src/sr_native_command_ledger.cpp src/sr_native_queue.cpp)
 set(SR_BUILD_REVISION "$ENV{SR_BUILD_REVISION}")
 if(NOT SR_BUILD_REVISION)
     execute_process(COMMAND git rev-parse --short=12 HEAD
@@ -48,8 +57,9 @@ if(REXGLUE_PLATFORM_SWITCH)
         endforeach()
         target_link_options(superman_returns PRIVATE -flto=2 -flto-partition=balanced)
     endif()
+    set(SR_NRO_NAME "Superman Returns NX (experimental)" CACHE STRING "hbmenu display name")
     rexglue_switch_add_nro(superman_returns
-        NAME "Superman Returns NX (experimental)"
+        NAME "${SR_NRO_NAME}"
         AUTHOR "Superman Returns NX contributors" VERSION "${PROJECT_VERSION}")
 elseif(TARGET imgui)
     target_include_directories(superman_returns PRIVATE

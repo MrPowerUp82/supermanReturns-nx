@@ -1,5 +1,44 @@
 # Biblioteca de shaders do Superman Returns
 
+## Corpus de gameplay do PC para o renderer nativo (2026-10-02)
+
+O importador lê somente `artifacts/shaders/raw/*.bin` da referência PC, valida
+estágio, limites, microcódigo e tabelas, e deduplica por estágio e bytes. Recusa
+um destino existente ou dentro da referência. Os arquivos derivados ficam em
+`out/`, ignorados pelo Git:
+
+```powershell
+python shaders/import_pc_corpus.py --reference ../superman_returns_recomp --output out/native-shaders/pc-import
+# Dentro do container de ferramentas, com DXC Linux funcional:
+# SR_CONTAINER_DIR=/project/out/native-shaders/pc-import/containers bash shaders/build_library.sh out/native-shaders/pc-spirv unused
+```
+
+A referência `257feabc050e03c287fdf6238bf55876e5b59d81` forneceu 223 containers
+distintos: 81 VS e 142 PS. A geração registra versões e hashes em
+`toolchain.log`; a compilação exige um SPIR-V validado para cada container.
+Na primeira rodada funcional, 223/223 passaram no DXC e no `spirv-val`
+Vulkan 1.2, e foram recuperados pelo packer. Isto mede o corpus local,
+sem demonstrar cobertura de todas as cenas ou fidelidade no console.
+
+Ferramentas desta rodada: DXC v1.9.2607, arquivo Linux
+`linux_dxc_2026_07_29.x86_x64.tar.gz`, SHA-256
+`55665c87824051ed4774ff3280a79ccbbb7d39243b9736ca5e98222134112d54`;
+imagem `superman-returns-nx-shaders:build`, ID
+`eff42a07f471fcd8d0b17258c641594405e9be674b2dca063fcd060455ef8e58`.
+
+Correções com regressões sintéticas: CTAB vazio; uma entrada por semantic
+mesmo com vários fetches; localização explícita NORMAL1; r0 inicial com
+VertexID; operandos escalares preservados quando a lane vetorial sobrescreve
+o mesmo registrador. A associação D3D guarda identidade por conteúdo e estágio,
+substituindo objetos reutilizados e recusando estágio incompatível.
+
+Auditoria dos patches PC: 0002 já coincide com os limites NX de 256 constantes
+e 128 temporários; 0005/0006/0009 motivaram as correções acima; 0008 do DXIL
+foi substituído por localização Vulkan explícita. 0004 (DEC3N) e 0007
+(fetch dinâmico) dependem da representação de geometria e são decisões da
+etapa de ABI/inputs. O ABI compartilhado atual ainda exige correção de tamanho
+e offsets antes da execução nativa: compilar SPIR-V não valida os dados enviados.
+
 `shaders/build_library.sh` gera uma biblioteca SPIR-V a partir da cópia própria
 do jogo. O resultado é preparação para um renderizador nativo Vulkan. O NRO
 atual carrega essa biblioteca para identificar recursos do jogo; os draws ainda

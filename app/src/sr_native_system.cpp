@@ -443,6 +443,27 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     };
     s.interrupt = [this](uint32_t cpu) { return DeliverInterrupt(1, cpu); };
     s.present = [this](uint32_t a, uint32_t b, uint32_t c) { return Present(a, b, c); };
+    s.finish_native_work=[this] {
+      if(stop_.cancelled()) return PacketResult::kCancelled;
+      // Milestone 1 has no queued guest GPU work before its first draw. Once a
+      // guest draw was omitted, no fence may assert that it rendered/completed.
+      // The actual native queue's last recognized serial replaces this guard
+      // when execution is integrated; future captured commands are not waited on.
+      return guest_draws_seen_?PacketResult::kBlocked:PacketResult::kConsumed;
+    };
+    s.startup_vertex_coherence = [this](uint32_t status,uint32_t base,uint32_t size) {
+      // Before the first guest draw there are no native guest vertex buffers or
+      // queued guest GPU work to invalidate. The presenter uses private images.
+      // This acknowledges only the observed startup VC request. Later requests
+      // require the real resource cache/serial backend and remain blocked here.
+      if (guest_draws_seen_ || status!=0x81000000 || !size || !ValidPhysicalRange(base,size)) return false;
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+      uint32_t expected=status;
+      if (!registers_[rex::graphics::XE_GPU_REG_COHER_STATUS_HOST].compare_exchange_strong(
+            expected,0,std::memory_order_acq_rel)) return false;
+      REXLOG_INFO("[sr-native] startup vertex cache invalidated base={:08X} bytes={:08X}; no guest GPU work submitted",base,size);
+      return true;
+    };
     s.shader_is_memory_safe = [this](uint32_t stage, std::span<const uint32_t> code) {
       ShaderSafetyCache::Verdict verdict;
       const bool safe = shader_safety_.IsSafe(stage, code, &verdict);
@@ -597,11 +618,12 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       }
       seen_write = write;
       Cursor cursor{std::span<const std::byte>(physical_->Host(snapshot.base), size_t(snapshot.words) * 4),
-                    ring.read_word, write & (snapshot.words - 1), snapshot.words - 1};
+                    ring.read_word, write & (snapshot.words - 1), snapshot.words - 1,snapshot.base};
       active_cursor_ = &cursor;
       PacketResult result;
       for (;;) {
         result = executor->ProcessNext(cursor);
+        if (executor->counters().draws_omitted || executor->counters().native_work_accepted) guest_draws_seen_=true;
         if (result != PacketResult::kConsumed) break;
         RecordNativeProgress();
       }
@@ -684,8 +706,13 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       return;
     }
     it->second = now;
-    REXLOG_WARN("[sr-native] WAIT pending info={:08X} address={:08X} reference={:08X} mask={:08X}", info,
-                address, reference, mask);
+    uint32_t value=0;
+    const bool readable=(info&0x10) ? physical_->ReadWord(address,value) : ReadRegister(address,value);
+    uint32_t coher_base=0,coher_size=0;
+    ReadRegister(rex::graphics::XE_GPU_REG_COHER_BASE_HOST,coher_base);
+    ReadRegister(rex::graphics::XE_GPU_REG_COHER_SIZE_HOST,coher_size);
+    REXLOG_WARN("[sr-native] WAIT pending info={:08X} address={:08X} reference={:08X} mask={:08X} readable={} value={:08X} coher_base={:08X} coher_size={:08X}", info,
+                address, reference, mask,readable,value,coher_base,coher_size);
   }
 
   void MaybeReport() {
@@ -731,6 +758,7 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
   std::condition_variable work_changed_;
   uint32_t ring_base_ = 0, ring_words_ = 0, ring_generation_ = 0;
   bool retry_pending_ = false;  // Ring thread only.
+  bool guest_draws_seen_ = false; // Ring thread only; survives ring replacement.
   std::atomic<uint32_t> write_pointer_{0};
   std::atomic<uint32_t> writeback_{0};
   Cursor* active_cursor_ = nullptr;  // Ring thread only.

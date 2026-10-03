@@ -115,7 +115,7 @@ O `compile-check.sh` usa uma biblioteca Vulkan stub e mascara a falha do build:
 não é evidência de link correto. Cada build aceito exige NRO/ELF reais e saída 0
 do build real; guardar o log integral e SHA-256 dos artefatos em `out/`.
 
-## Tarefa 1: Perfil Superman e acesso guest seguro
+## Task 1: Perfil Superman e acesso guest seguro
 
 **Files:** criar `app/src/sr_native_profile.h`, `sr_native_guest.h/.cpp`,
 `tests/test_sr_native_profile.cpp`, `tests/test_sr_native_guest.cpp`;
@@ -132,7 +132,7 @@ inalterada em falha. Produzir `DeviceLayout` e constantes de hooks em `profile`.
 - [ ] Implementar as interfaces e o perfil; usar validação SDK no binding real e callbacks em testes. Não reutilizar `base + address` do PC sem validação. Revisar licenças; quando a origem não puder ser atribuída, escrever implementação própria pelo contrato SDK.
 - [ ] Executar testes host e diff-check; commit apenas desses arquivos com `feat: add verified Superman native profile and guest access`.
 
-## Tarefa 2: Espelho PM4 e snapshots de estado
+## Task 2: Espelho PM4 e snapshots de estado
 
 **Files:** criar `sr_native_commands.h`, `sr_native_mirror.h/.cpp`,
 `sr_native_capture.h/.cpp`, `tests/test_sr_native_capture.cpp`; modificar runner.
@@ -148,7 +148,7 @@ Produz stamps e snapshots independentes da memória guest, com os tipos comuns.
 - [ ] Rodar todos os testes nativos e UBSan quando disponível; unknown packet não pode tornar snapshot válido se seu efeito de estado for necessário.
 - [ ] Commit de tarefa 2: `feat: capture immutable native D3D state and command stamps`.
 
-## Tarefa 3: Corpus SPIR-V e identidade de shader
+## Task 3: Corpus SPIR-V e identidade de shader
 
 **Files:** modificar `shaders/build_library.sh`, `nfsmw_hlsl.cpp`,
 `XenosRecomp/shader_recompiler.*` e `shader_common.h` quando a comparação exigir;
@@ -167,7 +167,7 @@ produz containers e manifesto local com revisão/patches/hashes; nunca altera PC
 - [ ] Gerar corpus em `out/native-shaders/<revisao>/` com o build_library adaptado e ferramentas DXC/spirv-val do ambiente de shaders; executar `test_translator.sh`, `test_pack_identify.sh`, `test_registry.sh`. Verificar cada SPIR-V com `spirv-val --target-env vulkan1.2 --scalar-block-layout`. Falha de tradução permanece explícita com identidade; nenhuma declaração de cobertura completa sem relatório do corpus.
 - [ ] Commit apenas fontes/testes/docs: `feat: build native Switch shader corpus from PC containers`.
 
-## Tarefa 4: Hooks D3D e bridge de captura
+## Task 4: Hooks D3D e bridge de captura
 
 **Files:** criar `sr_native_hooks.cpp`, `sr_native_bridge.h/.cpp`,
 `tests/test_sr_native_hook_capture.cpp`; modificar `sr_shader_hooks.cpp`,
@@ -184,7 +184,7 @@ produz containers e manifesto local com revisão/patches/hashes; nunca altera PC
 - [ ] Cross-compilar/linkar NRO real; conferir hooks no ELF e chamadas originais conservadas. Inspecionar originais para confirmar que não esperam a fence do próprio pacote antes de EndCall; se houver tal caminho, publicar captura no ponto anterior à espera com evidência registrada, sem contornar a espera.
 - [ ] Rodar host, registrar endereços e evidência em `docs/native-renderer.md`; commit `feat: intercept Superman D3D calls for native capture`.
 
-## Tarefa 5: Associação exata de operações e pacotes PM4
+## Task 5: Associação exata de operações e pacotes PM4
 
 **Files:** criar `sr_native_commands.cpp`, `tests/test_sr_native_order.cpp`;
 modificar `sr_native_ring.*`, `sr_native_system.cpp`, mirror e bridge.
@@ -203,7 +203,7 @@ indiretos, mantendo storage/retry sem efeitos duplicados.
 - [ ] Acrescentar log local opt-in de stamps/call scopes e comparar uma sequência real de boot no Switch quando disponível. Exigir ausência de mismatch, replay, pacote sem operação e espera circular antes de ligar execução GPU. Esse trace pode permanecer blocked pelo marco 1; coletar o primeiro motivo sem fingir progresso.
 - [ ] Rodar host/diff-check e commit `feat: correlate captured native operations with PM4 packets`.
 
-## Tarefa 6: Fila limitada e conclusão real
+## Task 6: Fila limitada e conclusão real
 
 **Files:** criar `sr_native_queue.h/.cpp`, `tests/test_sr_native_queue.cpp`;
 modificar commands, `sr_native_ring.*`, `sr_native_system.*`, `sr_settings.*`.
@@ -221,7 +221,7 @@ protege efeitos GPU-dependentes com o último serial correspondente já reconhec
 - [ ] Rodar testes multithread/UBSan; timeout do teste é falha, timeout GPU é diagnóstico/cancelamento. Definir cvars positivas de fila/bytes e logar limite; usar limite de teste injetado, padrão conservador documentado para boot, depois ajustar por medição na tarefa 14.
 - [ ] Commit `feat: bound native command queue and gate guest GPU completion`.
 
-## Tarefa 7: ABI SPIR-V e inputs de geometria
+## Task 7: ABI SPIR-V e inputs de geometria
 
 **Files:** criar `sr_native_shader_abi.h/.cpp`, `sr_native_geometry.h/.cpp`,
 `tests/test_sr_native_shader_abi.cpp`, `tests/test_sr_native_geometry.cpp`;
@@ -240,7 +240,7 @@ GeometryData possui bytes de streams/índices, atributos, topology e base vertex
 - [ ] Implementar input de fetch e conversão/endian conforme referência, sem importar fallback Xenos; investigar se helpers de `sdk/src/graphics/vulkan/pack_shaders.*` podem ser compartilhados sem mover recursos Xenos. Estabelecer `-fvk-invert-y` no emissor e viewport positivo; documentar convenção de winding/depth e testar.
 - [ ] Rodar host, regressões do tradutor e validar corpus regenerado; commit `feat: define native shader ABI and decode captured geometry`.
 
-## Tarefa 8: Recursos e submissão Vulkan
+## Task 8: Recursos e submissão Vulkan
 
 **Files:** criar `sr_native_gpu.h/.cpp`, `sr_native_resources.h/.cpp`,
 `tests/test_sr_native_resource_lifetime.cpp`; modificar present/system/CMake.
@@ -258,7 +258,7 @@ GPU Execute retorna pending após submissão; Complete na queue só após PollCo
 - [ ] Build real NRO, testes host e probe Vulkan sem jogo para upload/barreiras/fence, integrado à ferramenta existente `tools/switch/vk-probe/`. Registrar capabilities/limites do console; ausência de feature exigida falha setup com diagnóstico.
 - [ ] Commit `feat: execute native Vulkan submissions with bounded resource lifetime`.
 
-## Tarefa 9: Texturas, samplers e invalidação dos buffers
+## Task 9: Texturas, samplers e invalidação dos buffers
 
 **Files:** criar `sr_native_texture.h/.cpp`, `tests/test_sr_native_texture.cpp`,
 `tests/test_sr_native_buffer_cache.cpp`; modificar geometry/resources/gpu.
@@ -275,7 +275,7 @@ Vulkan converte formatos e swizzles, sem incluir DXGI. BufferVersion contém ger
 - [ ] Incorporar hash por frame para buffers de até 32 KB da correção da capa; buffers maiores exigem mecanismo de validade comprovado, não uma suposição de imutabilidade. Invalidar por Unlock, write tracking onde confiável e geração de alocação. Rodar regressões e build real.
 - [ ] Commit `feat: decode native textures and refresh mutable guest buffers`.
 
-## Tarefa 10: Pipelines, clear e superfícies HDR/profundidade
+## Task 10: Pipelines, clear e superfícies HDR/profundidade
 
 **Files:** criar `sr_native_pipeline.h/.cpp`, `sr_native_targets.h/.cpp`,
 `shaders/build_native_helpers.sh`,
@@ -294,7 +294,7 @@ blend/masks, alpha/depth/stencil/cull e specialization bits; viewport/scissor s�
 - [ ] Implementar alias/cópia de superfícies e correção HDR do PC com opções próprias reiniciáveis. Não reduzir MSAA guest por padrão; distinguir resolves multisample e single-sample. `shaders/build_native_helpers.sh <novo-output>` compila os shaders auxiliares próprios com DXC/spirv-val e emite header de uint32_t e manifesto das ferramentas; CMake consome o output ignorado e falha claramente se faltar. Fontes host próprias ficam no Git, sem blobs derivados do jogo.
 - [ ] Build real + testes host, executar quadro sintético no probe com cor/HDR/depth/culling conhecidos quando console disponível; commit `feat: render native Vulkan draws with guest surface and pipeline state`.
 
-## Tarefa 11: Resolves, readback guest e efeitos PM4
+## Task 11: Resolves, readback guest e efeitos PM4
 
 **Files:** criar `sr_native_resolve.h/.cpp`, `tests/test_sr_native_resolve.cpp`;
 modificar targets, gpu, ring/system e shaders auxiliares alias/depth-copy.
@@ -311,7 +311,7 @@ exige escrita CPU; escreve via GuestMemory somente após fence/invalidate.
 - [ ] Implementar queries realmente observadas com Vulkan query pools e publicação após conclusão. Memexport não suportado continua bloqueado; se presente nos cenários, implementar a escrita exigida e teste antes de aceite. Não usar zero/visibilidade fixa ou limpar COHER para escapar de bloqueador.
 - [ ] Rodar host/build real e comparar bytes de resolves sintéticos e cenas instrumentadas com a referência local; commit `feat: complete native resolves and guest memory effects after GPU fences`.
 
-## Tarefa 12: Apresentação da saída final, vídeo e encerramento
+## Task 12: Apresentação da saída final, vídeo e encerramento
 
 **Files:** modificar `sr_native_present.*`, system/bridge/gpu,
 `superman_returns_app.h`, `sr_settings.*`, `sr_shader_hooks.cpp`, CMake;
@@ -328,7 +328,7 @@ desliga publicação e cancela produtores antes de GPU/presenter serem liberados
 - [ ] Integrar OnPreSetup/OnPostInitLogging, flags native shader antes do setup Vulkan, biblioteca obrigatória no modo native e diagnóstico por modo. Atualizar milestone/build logs. Shutdown segue bridge/queue->workers->GPU->presenter; falha de drain retém recursos e informa incomplete.
 - [ ] Rastrear vídeo EA: documentar qual decoder/upload/draw o guest usa; cobrir as operações verificadas com shaders/texturas nativas. Testar intro habilitada e skip-intro no console; não introduzir decoder NFSMW por hipótese. Rodar build/host e commit `feat: present native Superman frames and preserve shutdown and video paths`.
 
-## Tarefa 13: Relatório, artefatos e aceite funcional no console
+## Task 13: Relatório, artefatos e aceite funcional no console
 
 **Files:** modificar `tools/switch/native-report.py`, `tests/test_native_report.py`,
 `docs/native-renderer.md`, README; criar `tools/switch/native-frames.py`,
@@ -346,7 +346,7 @@ GPU/device failures e shutdown. Resultado é `failed`, `needs_console_review` ou
 - [ ] Com usuário abrindo NRO e FTP disponível, preservar TOML e builds, subir nome novo e verificar download/hash. Rodadas: intro ligada, título/menu, início da cidade, movimento/capa/HUD, retorno e saída; comparar áudio/progresso com execução Xenos separada. Guardar captures/logs e corrigir primeiro bloqueador com teste antes de repetir.
 - [ ] Completar ao menos 10 min contínuos sem crescimento ilimitado de memória, crash, áudio parado ou workers presos; marcar cada critério visual confrontado com captura Xbox 360 ou explicitamente pendente. Commit de ferramentas/docs apenas: `test: record native Switch gameplay acceptance and artifact checks`.
 
-## Tarefa 14: Medição e otimização até a meta
+## Task 14: Medição e otimização até a meta
 
 **Files:** criar `sr_native_metrics.h/.cpp`, `tests/test_sr_native_metrics.cpp`;
 modificar gpu/resources/settings e native-frames, testes Python e docs de validação.

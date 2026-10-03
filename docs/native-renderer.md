@@ -1,5 +1,42 @@
 # Native renderer (milestone 1)
 
+## Gameplay implementation in progress — 2026-10-02
+
+The PC runtime corpus (223 shaders) has been translated, compiled and validated
+as SPIR-V locally. New checked guest access, PM4 state snapshots and opt-in
+`sr_native_capture` hooks are being integrated on branch
+`codex/superman-native-gameplay`. This is capture infrastructure, not completed
+native gameplay. Host tests and a linked NRO do not establish console acceptance.
+The user confirmed the remote logs are old Xenos runs; no native test run has
+occurred. Keep new build directories/logs separate from those historical logs.
+
+The hooks preserve original PPC calls and capture arguments before register
+clobber, with state after dirty-state flush. UP nests BeginVertices and updates
+the segment cursor itself; independent Begin/End calls keep their data per thread.
+Segment-tail capture spans allocation changes and retains distinct epochs.
+Clear float4 and depth are copied as floats. Resolve stencil comes from entry
+SP+92, proven by the original's 368-byte stack frame and new-SP+460 load.
+Shader creators 820F5148/820F4D90 take a container in r3 and return the object in
+r3; associations compare exact container bytes and stage.
+
+Static call-graph audit found fence waits through RingMakeSpace/allocators in
+DrawVertices, indexed draws, UP, clear, resolve and swap. The BlockOnFence
+observation hook synchronizes the mirror before invoking the original wait.
+Immutable observation fragments are emitted at the segment switch and fence
+entry before the original proceeds. Drained stamps are removed from the outer
+scope so its final capture cannot replay them. These fragments do not execute
+native clears/draws; execution must preserve partial-operation semantics and
+verify correlation on a fresh console trace. Capture mode never bypasses a guest wait or completes
+GPU work. Log output is bounded to the first 512 completed operations and 32
+rejections/fence probes; stamps report host-order words and physical sites.
+
+Cross builds use the real Mesa/NVK SDK. The existing Docker build volume keeps
+its generated game sources and dependencies, with tracked sources overlaid;
+the new NRO is copied under a distinct capture filename. Existing SD settings,
+historical logs, shader packs and NROs must be preserved when deploying.
+TOML path overrides are finalized after config loading, allowing an isolated
+capture folder to reference the original game data without copying or changing it.
+
 Status: Tasks 1-7 of `docs/superpowers/plans/2026-10-01-renderer-nativo-marco1.md` are implemented
 and host-tested, but the milestone is **not accepted**: no console round has run (see `checkpoint8.md`). Milestone 1 only consumes the PM4 stream and presents an opaque black image; game draws
 are counted as omitted.
@@ -116,3 +153,41 @@ packets, no report, missing `shutdown=complete`, not a native run), `blocked` (b
 `BLOCKED` event, no or stalled progress) and `needs_console_review`, which still requires the
 manual checklist it prints. Presentation counters (`refreshes`, `surface_paints`) never turn a
 blocked run into a pass. It only reads the log: no SD or config access, nothing is published.
+
+Current gameplay investigation (2026-10-02): fresh `f85b510-boot3` and
+`482cbb5-debug4` console logs confirm native initialization, but no completed swap or
+gameplay frame. Debug4 identifies the initial WAIT_REG_MEM at COHER_STATUS_HOST
+(`0xA31`, value `0x81000000`, mask `0x80000000`) and rejected captures containing
+physical LOAD_ALU_CONSTANT/IM_LOAD packets. These are blocked runs, not rendering acceptance.
+
+The follow-up `d34d897-fix5` reads shader, constant and indirect data through checked
+canonical physical memory instead of treating the A000 virtual alias as allocation
+authority. It acknowledges only the initial vertex-cache invalidate while no guest draw
+or guest GPU work has occurred; destination coherency and waits after a draw remain
+blocked until the resource/serial backend exists. Host regressions and the Switch cross
+link pass. At the user's request, deployment is
+directly `/switch/superman-returns-nx/superman_returns.nro`, with configuration and shader
+pack beside it, using FTP `192.168.1.75:5000`. No capture subfolder is used on the SD.
+
+The fresh fix5 console run (`superman_returns_003.log`, SHA-256
+`9d4f675c134a67d564cf353dc162fccb2cf6f21c76ffc2b11a13e76c0eea002b`)
+acknowledges the startup vertex-cache invalidation and captures 54 operations,
+including draw packets and physical shader loads, without capture rejection.
+The next blocker is EVENT_WRITE_SHD (`0x58`) at physical `0x1F4D003C`.
+Completed swaps and gameplay frames remain zero. The observed black screen is
+therefore still a blocked native run.
+
+Queue and association foundations now have host regressions for bounded
+in-flight snapshot memory, cancellation, serial gaps, physical packet locations,
+predicated tokens and accepted-token retries after failed SDK register writes.
+Allocation epochs are supplied through an explicit registry callback; they are
+checked around packet/indirect copies and cached with owned words for retries.
+The live allocation registry and GPU executor are not wired yet, so these
+association callbacks remain disabled in NativeSystem. Tasks 5 and 6 are unfinished.
+
+EVENT_WRITE_SHD and WAIT_FOR_IDLE require an explicit completion callback.
+The current milestone can acknowledge that no guest GPU work exists before its
+first draw; once any draw was omitted or native work accepted, the callback
+blocks until a real executor can prove completion. The SHD counter uses completed
+swaps rather than vblank, freezes its value across write retries and does not
+publish a fence when the completion callback is missing, blocked or cancelled.

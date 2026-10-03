@@ -109,16 +109,36 @@ PacketResult RingExecutor::WriteValues(bool memory, uint32_t address, uint32_t s
   return PacketResult::kConsumed;
 }
 
+PacketResult RingExecutor::LoadPacket(const Cursor& cursor,PendingPacket& pending,uint32_t address) {
+  PacketSite before;
+  if(services_.native_packet && (!services_.packet_site ||
+      !services_.packet_site(address,4,before))) return PacketResult::kBlocked;
+  PacketView packet;
+  const auto parsed=PeekPacket(cursor,packet);
+  if(parsed!=PacketResult::kConsumed) return parsed;
+  if(services_.native_packet) {
+    PacketSite after;
+    const uint32_t bytes=uint32_t((packet.payload.size()+1)*4);
+    if(!before.allocation_epoch || before.physical_address!=address ||
+        !services_.packet_site(address,bytes,after) || after!=before) return PacketResult::kInvalid;
+    pending.stamp={before,packet.header,packet.payload};
+  }
+  pending.packet=std::move(packet);pending.loaded=true;
+  return PacketResult::kConsumed;
+}
 PacketResult RingExecutor::ProcessNext(Cursor& root) {
   if (services_.cancelled && services_.cancelled()) return PacketResult::kCancelled;
   if (root_pending_.loaded) {
     if (root.bytes.data() != root_data_ || root.bytes.size() != root_size_ ||
-        root.position != root_position_ || root.mask != root_mask_) {
+        root.position != root_position_ || root.mask != root_mask_ ||
+        root.physical_base != root_physical_base_) {
       ++counters_.invalid;
       return PacketResult::kInvalid;
     }
   } else {
-    auto result = PeekPacket(root, root_pending_.packet);
+    const uint64_t address=uint64_t(root.physical_base)+uint64_t(root.position)*4;
+    if(address>UINT32_MAX) return PacketResult::kInvalid;
+    auto result = LoadPacket(root,root_pending_,uint32_t(address));
     if (result != PacketResult::kConsumed) {
       if (result == PacketResult::kInvalid) ++counters_.invalid;
       return result;
@@ -126,6 +146,7 @@ PacketResult RingExecutor::ProcessNext(Cursor& root) {
     root_pending_.loaded = true;
     root_data_ = root.bytes.data(); root_size_ = root.bytes.size();
     root_position_ = root.position; root_mask_ = root.mask;
+    root_physical_base_=root.physical_base;
   }
   for (;;) {
     if (services_.cancelled && services_.cancelled()) return PacketResult::kCancelled;
@@ -136,11 +157,14 @@ PacketResult RingExecutor::ProcessNext(Cursor& root) {
     }
     Cursor& cursor = indirect_stack_.empty() ? root : indirect_stack_.back().cursor;
     PendingPacket& pending = indirect_stack_.empty() ? root_pending_ : indirect_stack_.back().pending;
-    const uint32_t address = (indirect_stack_.empty() ? 0 : indirect_stack_.back().address) + cursor.position * 4;
+    const uint32_t address = (indirect_stack_.empty() ? root.physical_base : indirect_stack_.back().address) + cursor.position * 4;
     auto result = PacketResult::kConsumed;
     if (!pending.loaded) {
-      result = PeekPacket(cursor, pending.packet);
-      if (result == PacketResult::kConsumed) pending.loaded = true;
+      result = LoadPacket(cursor,pending,address);
+      if(result==PacketResult::kConsumed && services_.native_packet &&
+          pending.stamp.site.allocation_epoch!=indirect_stack_.back().allocation_epoch) {
+        pending={};result=PacketResult::kInvalid;
+      }
     }
     const auto depth = uint32_t(indirect_stack_.size());
     if (result == PacketResult::kConsumed) {
@@ -207,7 +231,11 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
   }
   const uint32_t op = (packet.header >> 8) & 0x7f;
   // Predication precedes the handler, including format checks, as in the SDK.
-  if ((packet.header & 1) && (!(bin_select_ & bin_mask_) || op == PM4_XE_SWAP)) return kConsumed;
+  if ((packet.header & 1) && (!(bin_select_ & bin_mask_) || op == PM4_XE_SWAP)) {
+    if(services_.native_packet && (op==PM4_DRAW_INDX || op==PM4_DRAW_INDX_2 || op==PM4_XE_SWAP))
+      return services_.native_packet(executing_->stamp,false);
+    return kConsumed;
+  }
   switch (op) {
     case PM4_NOP: case PM4_ME_INIT: case PM4_INVALIDATE_STATE:
       return kConsumed;
@@ -224,6 +252,11 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       return kConsumed;
     case PM4_XE_SWAP:
       if (p.size() < 4 || p[0] != kSwapSignature) return kInvalid;
+      if(services_.native_packet) {
+        const auto accepted=services_.native_packet(executing_->stamp,true);
+        if(accepted==kConsumed) ++counters_.native_work_accepted;
+        return accepted;
+      }
       if (!executing_->prepared) { ++counters_.swap_requests; executing_->prepared = true; }
       {
         const bool refreshed = services_.present && services_.present(p[1], p[2], p[3]);
@@ -240,8 +273,17 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       if (std::find(active_indirects_.begin(), active_indirects_.end(), key) != active_indirects_.end()) return kInvalid;
       IndirectFrame frame;
       frame.address = address;
+      PacketSite before;
+      if(services_.native_packet && (!services_.packet_site ||
+          !services_.packet_site(address,p[1]*4,before))) return kBlocked;
       if (!services_.read_indirect || !services_.read_indirect(address, p[1], frame.storage)) return kBlocked;
       if (frame.storage.size() != uint64_t(p[1]) * 4) return kInvalid;
+      if(services_.native_packet) {
+        PacketSite after;
+        if(!before.allocation_epoch || before.physical_address!=address ||
+            !services_.packet_site(address,p[1]*4,after) || after!=before) return kInvalid;
+        frame.allocation_epoch=before.allocation_epoch;
+      }
       frame.cursor = {frame.storage, 0, p[1], 0};
       executing_->child_started = true;
       active_indirects_.push_back(key); indirect_stack_.push_back(std::move(frame));
@@ -253,8 +295,20 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       for (;;) {
         if (services_.cancelled && services_.cancelled()) return kCancelled;
         uint32_t value = 0;
-        if (!Read(p[0] & 0x10, p[1], value)) return kBlocked;
-        if (!(p[0] & 0x10) && p[1] == XE_GPU_REG_COHER_STATUS_HOST && (value & 0x80000000u)) return kBlocked;
+        if (!Read(p[0] & 0x10, p[1], value)) {
+          if (services_.report_wait) services_.report_wait(p[0],p[1],p[2],p[3]);
+          return kBlocked;
+        }
+        if (!(p[0]&0x10) && p[1]==XE_GPU_REG_COHER_STATUS_HOST && (value&0x80000000u)) {
+          uint32_t base=0,size=0;
+          if (value!=0x81000000 || counters_.draws_omitted || !services_.startup_vertex_coherence ||
+              !Read(false,XE_GPU_REG_COHER_BASE_HOST,base) || !Read(false,XE_GPU_REG_COHER_SIZE_HOST,size) ||
+              !services_.startup_vertex_coherence(value,base,size) ||
+              !Read(false,p[1],value) || (value&0x80000000u)) {
+            if (services_.report_wait) services_.report_wait(p[0],p[1],p[2],p[3]);
+            return kBlocked;
+          }
+        }
         if (CompareWait(p[0], value, p[2], p[3])) return kConsumed;
         if (services_.report_wait) services_.report_wait(p[0], p[1], p[2], p[3]);
         if (!services_.pause_wait) return kBlocked;
@@ -299,15 +353,25 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       return Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, p[0] & 0x3f) ? kConsumed : kBlocked;
     case PM4_EVENT_WRITE_SHD:
       if (p.size() < 3 || !MemoryExtent(p[1], 1)) return kInvalid;
-      if (p[0] & 0x80000000u) return kBlocked;  // No synthetic native GPU counter.
+      if (!executing_->prepared) {
+        if (!services_.finish_native_work) return kBlocked;
+        const auto finished=services_.finish_native_work();
+        if(finished!=kConsumed) return finished;
+        // The SDK counter increments on XE_SWAP, not on vblank or omitted draws.
+        // Only completed presenter swaps contribute here; retries keep this value.
+        executing_->values={p[0]&0x80000000u?uint32_t(counters_.refresh_completed):p[2]};
+        executing_->prepared=true;
+      }
       if (!executing_->effect) {
         if (!Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, p[0] & 0x3f)) return kBlocked;
         ++executing_->effect;
       }
-      return Write(true, p[1], p[2]) ? kConsumed : kBlocked;
+      return Write(true, p[1], executing_->values[0]) ? kConsumed : kBlocked;
     case PM4_EVENT_WRITE_EXT:
       return p.size() < 2 ? kInvalid : kBlocked;
-    case PM4_EVENT_WRITE_ZPD: case PM4_VIZ_QUERY: case PM4_WAIT_FOR_IDLE:
+    case PM4_WAIT_FOR_IDLE:
+      return services_.finish_native_work?services_.finish_native_work():kBlocked;
+    case PM4_EVENT_WRITE_ZPD: case PM4_VIZ_QUERY:
       return kBlocked;
     case PM4_SET_CONSTANT: case PM4_SET_CONSTANT2: case PM4_SET_SHADER_CONSTANTS: {
       const uint32_t base = op == PM4_SET_CONSTANT ? ConstantBase(p[0]) : 0;
@@ -373,6 +437,9 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
         case EdramMode::kColorDepth:
         case EdramMode::kDepthOnly:
           break;
+        case EdramMode::kCopy:
+          if(!services_.native_packet) return kBlocked;
+          break; // A captured resolve token belongs to the native resource backend.
         default: return kBlocked;  // Copy and undefined modes have no harmless draw interpretation.
       }
       if (start && p[0] & 0x100) return kBlocked;
@@ -382,6 +449,12 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
           ++counters_.draws_shader_blocked; return kBlocked;
         }
       }
+      if(services_.native_packet && !executing_->native_accepted) {
+        const auto accepted=services_.native_packet(executing_->stamp,true);
+        if(accepted!=kConsumed) return accepted;
+        executing_->native_accepted=true;
+        ++counters_.native_work_accepted;
+      }
       const uint32_t regs[] = {XE_GPU_REG_VGT_DRAW_INITIATOR, XE_GPU_REG_VGT_DMA_BASE, XE_GPU_REG_VGT_DMA_SIZE};
       const size_t count = source == uint32_t(SourceSelect::kDMA) ? 3 : 1;
       for (; executing_->effect < count; ++executing_->effect) {
@@ -389,7 +462,7 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
         const auto i = executing_->effect;
         if (!Write(false, regs[i], p[start + i])) return kBlocked;
       }
-      ++counters_.draws_omitted;
+      if(!services_.native_packet) ++counters_.draws_omitted;
       return kConsumed;
     }
     default: return kBlocked;
