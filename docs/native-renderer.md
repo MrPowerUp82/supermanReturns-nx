@@ -153,3 +153,18 @@ packets, no report, missing `shutdown=complete`, not a native run), `blocked` (b
 `BLOCKED` event, no or stalled progress) and `needs_console_review`, which still requires the
 manual checklist it prints. Presentation counters (`refreshes`, `surface_paints`) never turn a
 blocked run into a pass. It only reads the log: no SD or config access, nothing is published.
+
+Current gameplay investigation (2026-10-02): fresh `f85b510-boot3` and
+`482cbb5-debug4` console logs confirm native initialization, but no completed swap or
+gameplay frame. Debug4 identifies the initial WAIT_REG_MEM at COHER_STATUS_HOST
+(`0xA31`, value `0x81000000`, mask `0x80000000`) and rejected captures containing
+physical LOAD_ALU_CONSTANT/IM_LOAD packets. These are blocked runs, not rendering acceptance.
+
+The follow-up `d34d897-fix5` reads shader, constant and indirect data through checked
+canonical physical memory instead of treating the A000 virtual alias as allocation
+authority. It acknowledges only the initial vertex-cache invalidate while no guest draw
+or guest GPU work has occurred; destination coherency and waits after a draw remain
+blocked until the resource/serial backend exists. Host regressions and the Switch cross
+link pass; this follow-up still needs a console run. At the user's request, deployment is
+directly `/switch/superman-returns-nx/superman_returns.nro`, with configuration and shader
+pack beside it, using FTP `192.168.1.75:5000`. No capture subfolder is used on the SD.

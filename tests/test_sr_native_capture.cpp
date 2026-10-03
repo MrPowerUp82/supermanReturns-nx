@@ -29,7 +29,7 @@ int main() {
   assert(mirror.Scan(memory,broken,{1,0x118}) == NativeResult::kInvalid);
   assert(mirror.Register(0x4000)==0 && mirror.VsVersion()==version);
   auto indirect=BE({0xc0013f00,0x400,3});
-  // Cached physical alias cannot be accessed by this memory binding: reject, never skip.
+  // This virtual-only binding has no physical reader: reject, never skip.
   assert(mirror.Scan(memory,indirect,{1,0x118}) == NativeResult::kInvalid);
   assert(mirror.VsVersion()==version);
   mirror.ResetSegment(2);
