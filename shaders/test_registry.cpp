@@ -1,4 +1,5 @@
 #include "sr_shader_registry.h"
+#include "sr_native_commands.h"
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -90,6 +91,15 @@ static void RegistryChecks(const std::filesystem::path& path) {
     Check(!registry.FindEngineResource(0x81234560), "Reused address retained stale shader");
     registry.RememberEngineResource(0, shader);
     Check(!registry.FindEngineResource(0), "Null resource must not be registered");
+    sr::native::ShaderIdentity identity{entry.vertices, entry.original};
+    registry.RememberD3DObject(0x82345600, identity);
+    Check(registry.FindD3DObject(0x82345600) == shader, "D3D object identity missing");
+    identity.vertex = !identity.vertex;
+    registry.RememberD3DObject(0x82345600, identity);
+    Check(!registry.FindD3DObject(0x82345600), "Stage mismatch retained old object identity");
+    registry.RememberD3DObject(0x82345600, {entry.vertices, entry.original});
+    registry.ForgetD3DObject(0x82345600);
+    Check(!registry.FindD3DObject(0x82345600), "Destroyed D3D object retained stale identity");
   }
   bool refused = false;
   try { registry.Load(path); } catch (const std::logic_error&) { refused = true; }

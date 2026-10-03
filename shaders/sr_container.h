@@ -34,17 +34,21 @@ inline nfsmw::Flujo Validate(const std::vector<uint8_t>& data) {
     if (o > vs || n > vs - o) throw std::runtime_error("table outside the virtual part");
   };
   in_virtual(sh, pixel ? 32 : 36);
-  if (ct < kHeaderSize) throw std::runtime_error("missing constant table");
-  in_virtual(ct, 32);
-  const uint32_t base_ct = ct + 4, constants = l.u32(base_ct + 12);
-  in_virtual(uint64_t(base_ct) + l.u32(base_ct + 16), uint64_t(constants) * 20);
-  for (uint32_t i = 0; i < constants; ++i) {
-    const uint64_t info = uint64_t(base_ct) + l.u32(base_ct + 16) + i * 20ull;
-    const uint64_t name = uint64_t(base_ct) + l.u32(uint32_t(info));
-    in_virtual(name, 1);
-    if (!std::memchr(data.data() + name, 0, vs - name))
-      throw std::runtime_error("constant name without terminator");
-    in_virtual(uint64_t(base_ct) + l.u32(uint32_t(info + 12)), 16);
+  // Minimal runtime clear/copy shaders can have no CTAB at all. A nonzero
+  // pointer still has to describe a complete table in the virtual part.
+  if (ct) {
+    if (ct < kHeaderSize) throw std::runtime_error("invalid constant table offset");
+    in_virtual(ct, 32);
+    const uint32_t base_ct = ct + 4, constants = l.u32(base_ct + 12);
+    in_virtual(uint64_t(base_ct) + l.u32(base_ct + 16), uint64_t(constants) * 20);
+    for (uint32_t i = 0; i < constants; ++i) {
+      const uint64_t info = uint64_t(base_ct) + l.u32(base_ct + 16) + i * 20ull;
+      const uint64_t name = uint64_t(base_ct) + l.u32(uint32_t(info));
+      in_virtual(name, 1);
+      if (!std::memchr(data.data() + name, 0, vs - name))
+        throw std::runtime_error("constant name without terminator");
+      in_virtual(uint64_t(base_ct) + l.u32(uint32_t(info + 12)), 16);
+    }
   }
   if (def) in_virtual(def, 24);
   const uint32_t code_offset = l.u32(sh), code_size = l.u32(sh + 4);

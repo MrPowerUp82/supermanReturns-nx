@@ -1,4 +1,5 @@
 #include "sr_shader_registry.h"
+#include "sr_native_commands.h"
 #include <stdexcept>
 
 namespace sr::native {
@@ -35,5 +36,22 @@ const Shader* ShaderRegistry::FindEngineResource(uint32_t resource) const {
 ShaderRegistry& RuntimeShaders() {
   static ShaderRegistry registry;
   return registry;
+}
+void ShaderRegistry::RememberD3DObject(uint32_t object, const ShaderIdentity& identity) {
+  if (!object) return;
+  const auto* shader = Identify(identity.container);
+  if (shader && shader->vertices != identity.vertex) shader = nullptr;
+  std::lock_guard lock(mutex_);
+  if (shader) d3d_objects_.insert_or_assign(object, shader);
+  else d3d_objects_.erase(object);
+}
+const Shader* ShaderRegistry::FindD3DObject(uint32_t object) const {
+  std::lock_guard lock(mutex_);
+  const auto it = d3d_objects_.find(object);
+  return it == d3d_objects_.end() ? nullptr : it->second;
+}
+void ShaderRegistry::ForgetD3DObject(uint32_t object) {
+  std::lock_guard lock(mutex_);
+  d3d_objects_.erase(object);
 }
 }  // namespace sr::native
