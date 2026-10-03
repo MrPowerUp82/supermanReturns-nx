@@ -71,11 +71,12 @@ struct ResolvePayload {
   uint32_t clear_stencil = 0;
 };
 struct SwapPayload { GuestAddress front_buffer = 0; uint32_t width = 0, height = 0; };
+using CommandPayload=std::variant<DrawPayload, ClearPayload, ResolvePayload, SwapPayload>;
 struct NativeCommand {
   Serial serial = 0;
   CommandKind kind = CommandKind::kDraw;
   std::vector<PacketStamp> stamps;
   CapturedState state;
-  std::variant<DrawPayload, ClearPayload, ResolvePayload, SwapPayload> payload;
+  CommandPayload payload;
 };
 }  // namespace sr::native

@@ -1,5 +1,42 @@
 # Native renderer (milestone 1)
 
+## Gameplay implementation in progress — 2026-10-02
+
+The PC runtime corpus (223 shaders) has been translated, compiled and validated
+as SPIR-V locally. New checked guest access, PM4 state snapshots and opt-in
+`sr_native_capture` hooks are being integrated on branch
+`codex/superman-native-gameplay`. This is capture infrastructure, not completed
+native gameplay. Host tests and a linked NRO do not establish console acceptance.
+The user confirmed the remote logs are old Xenos runs; no native test run has
+occurred. Keep new build directories/logs separate from those historical logs.
+
+The hooks preserve original PPC calls and capture arguments before register
+clobber, with state after dirty-state flush. UP nests BeginVertices and updates
+the segment cursor itself; independent Begin/End calls keep their data per thread.
+Segment-tail capture spans allocation changes and retains distinct epochs.
+Clear float4 and depth are copied as floats. Resolve stencil comes from entry
+SP+92, proven by the original's 368-byte stack frame and new-SP+460 load.
+Shader creators 820F5148/820F4D90 take a container in r3 and return the object in
+r3; associations compare exact container bytes and stage.
+
+Static call-graph audit found fence waits through RingMakeSpace/allocators in
+DrawVertices, indexed draws, UP, clear, resolve and swap. The BlockOnFence
+observation hook synchronizes the mirror before invoking the original wait.
+Immutable observation fragments are emitted at the segment switch and fence
+entry before the original proceeds. Drained stamps are removed from the outer
+scope so its final capture cannot replay them. These fragments do not execute
+native clears/draws; execution must preserve partial-operation semantics and
+verify correlation on a fresh console trace. Capture mode never bypasses a guest wait or completes
+GPU work. Log output is bounded to the first 512 completed operations and 32
+rejections/fence probes; stamps report host-order words and physical sites.
+
+Cross builds use the real Mesa/NVK SDK. The existing Docker build volume keeps
+its generated game sources and dependencies, with tracked sources overlaid;
+the new NRO is copied under a distinct capture filename. Existing SD settings,
+historical logs, shader packs and NROs must be preserved when deploying.
+TOML path overrides are finalized after config loading, allowing an isolated
+capture folder to reference the original game data without copying or changing it.
+
 Status: Tasks 1-7 of `docs/superpowers/plans/2026-10-01-renderer-nativo-marco1.md` are implemented
 and host-tested, but the milestone is **not accepted**: no console round has run (see `checkpoint8.md`). Milestone 1 only consumes the PM4 stream and presents an opaque black image; game draws
 are counted as omitted.

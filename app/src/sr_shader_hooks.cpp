@@ -17,7 +17,7 @@ void InitializeRuntimeShaders() {
   try {
     RuntimeShaders().Load(rex::filesystem::GetExecutableFolder() / "superman_returns_shaders.srsp");
   } catch (const std::exception& error) {
-    REXLOG_WARN("SR shader library unavailable: {}; draws use Xenos", error.what());
+    REXLOG_WARN("SR shader library unavailable: {}", error.what());
     return;
   }
   // The registry is immutable from here on, so the Vulkan backend can keep spans into it.
