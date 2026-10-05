@@ -28,8 +28,10 @@ Etapas para um port jogável:
    Estado dos probes em [validation.md](validation.md).
 3. Comparar imagens do Vulkan/Xenos com o D3D12 do PC e testar áudio/entrada/saves.
 4. Confirmar as funções XDK do Superman com capturas e análise do executável.
-5. Adaptar o renderizador nativo Vulkan do NFSMW: estados, tiling/resolve, formatos,
-   shaders extraídos dos AST e constantes de cada draw. Manter comparação visual.
+5. Renderer nativo Vulkan: **integrado** (não do NFSMW, e sim o do projeto PC, `app/src/pcvk/`;
+   ver [pcvk-import.md](pcvk-import.md)), validado em GPU de host e com guest sintético, **ainda sem
+   NRO nem teste no console**. Falta: gerar o pack de shaders com o jogo, compilar o NRO, rodar o
+   roteiro de bring-up de [native-renderer.md](native-renderer.md), comparar a imagem com o Xenos.
 6. Perfilar mundo aberto e otimizar CPU/GPU, depois registrar PGO do próprio jogo.
 
 Redução de resolução e remoção de efeitos do projeto PC não foram importadas:

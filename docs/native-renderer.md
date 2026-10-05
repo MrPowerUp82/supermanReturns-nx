@@ -1,4 +1,97 @@
-# Native renderer (milestone 1)
+# Native renderer
+
+## Vulkan renderer of the PC project (`sr_vk`) — 2026-10-05
+
+`sr_renderer = "native"` now draws the game. It uses the Vulkan renderer of
+`superman_returns_recomp` (imported as `app/src/pcvk/`, see [pcvk-import.md](pcvk-import.md)),
+which already reached gameplay on the PC. This replaces the stalled PM4-association/queue design
+(Tasks 5-12 of `docs/superpowers/plans/2026-10-02-renderer-nativo-gameplay.md`): the hooked D3D calls
+capture everything a command reads from guest memory, so the PM4 stream no longer has to be matched
+to GPU work.
+
+**Status: not run on a console.** The renderer core is validated on a host GPU (lavapipe), the
+front end against a synthetic guest, and the console-side files against the SDK headers; an NRO has
+not been built from this tree and nothing has been seen on screen. Treat the first console round as
+bring-up, not acceptance.
+
+### Selecting and configuring
+
+| Option (`superman_returns.toml`) | Default | Meaning |
+|---|---|---|
+| `sr_renderer` | `"xenos"` | `"native"` selects this renderer (requires restart) |
+| `sr_vk` | `true` | with `native`: Vulkan renderer; `false` = the milestone-1 black clear |
+| `sr_vk_shader_pack` | next to the NRO | `superman_returns_vulkan_shaders.srvk` |
+| `sr_vk_pipeline_cache` | next to the NRO | `superman_returns_vulkan_pipelines.bin` (driver cache, written at run time) |
+| `sr_vk_worker_lag` | `true` | the worker may finish frame N while the guest builds N+1 |
+| `sr_vk_texture_per_frame_max_kb` | `4096` | textures up to this size are re-hashed every frame |
+| `sr_vk_large_texture_recheck_frames` | `30` | frames between re-hashes of larger textures |
+
+With `native` the SDK Vulkan device is created with `vulkan_native_shader_features` (dynamic
+descriptor indexing, mirror clamp, independent blend, ...). The renderer refuses to start, with the
+list of missing features in the log, if the device lacks one.
+
+### Shader pack
+
+The console cannot translate shaders. `tools/vkshaders/build_pack.py` runs the PC project's patched
+XenosRecomp (13 patches on the pinned upstream) and DXC offline on guest shader containers and writes
+`superman_returns_vulkan_shaders.srvk` (layout in `app/src/pcvk/graphics/shaders/shader_pack.h`):
+
+```sh
+python tools/vkshaders/fetch_xenosrecomp.py
+cmake -S tools/vkshaders/xenosrecomp -B .tools/xenosrecomp/build -G Ninja -DBUILD_TESTING=OFF
+cmake --build .tools/xenosrecomp/build
+python tools/vkshaders/build_pack.py --containers ../superman_returns_recomp/artifacts/shaders/raw \
+    --output out/superman_returns_vulkan_shaders.srvk --allow-failures
+python tools/project.py package --vulkan-shader-pack out/superman_returns_vulkan_shaders.srvk ...
+```
+
+The pack is keyed by FNV-1a 64 of the exact container bytes. A container missing from the pack makes
+the draws that use it be skipped and counted (`pack_misses`, plus one log line with the key). Dump the
+missing containers with `sr_dump_shader_containers` (or the PC `--sr_native_dump_shader_dir`) and add
+them. The pack is derived from the game: never commit it.
+
+### Log lines
+
+`[sr-vk] summary ...` every 10 s (with the existing `[sr-native] summary`) and at shutdown:
+
+| Key | Meaning |
+|---|---|
+| `commands`, `batches`, `swaps` | commands captured by the hooks, batches handed to the worker, guest swaps |
+| `capture_failures` | commands dropped because referenced guest memory was not readable (first 8 are logged) |
+| `decode_failures` | commands the packet decoder rejected (first 16 are logged) |
+| `sink_failures` | renderer stopped after a fatal error (the reason is logged once) |
+| `texture_failures` | bound textures that could not be described/captured |
+| `ring_resyncs` | command-segment cursor losses (should stay near 0) |
+| `buffers`, `buffer_uploads`, `upload_mb` | tracked vertex/index buffers and bytes sent to the renderer |
+| `frames`, `composed`, `compose_failures` | frames produced by the renderer / composed into the presenter image |
+| `pack_misses` | distinct shader containers not found in the pack |
+
+`[sr-vk] Submitted native Vulkan frame=N, draws=..., skipped_draws=..., skipped_shaders=...` is logged
+for the first frame, every 120th and every slow (>100 ms) frame.
+
+### Console test procedure (bring-up)
+
+1. Build the NRO as in [building.md](building.md) (the build links `sr_pcvk_*`; `SR_NATIVE_LEGACY_CAPTURE=ON`
+   restores the milestone-1 hooks instead).
+2. Copy the NRO, `superman_returns_vulkan_shaders.srvk` and `superman_returns.toml` with
+   `sr_renderer = "native"` to `sdmc:/switch/superman-returns-nx/`. Keep the Xenos NRO and config.
+3. Run for 60 s in full (title takeover) mode and collect the log. First things to read, in order:
+   `[sr-vk] native Vulkan renderer ready` (device features), `shader pack ... N shaders`,
+   `D3D hooks active`, then the summaries: `swaps` rising, `composed` rising, `decode_failures` and
+   `capture_failures` at 0, `pack_misses` small.
+4. A black screen with `composed` rising and `pack_misses` high means shaders are missing from the pack,
+   not that the renderer is broken. A frozen image with `sink_failures` > 0 gives the reason in the log.
+
+### Not done / known limits
+
+- No console run yet. Memory (the process was already at its 3 GB limit on the Xenos path), CPU cost of
+  the front end (guest memory validation per read, per-frame texture hashing) and GPU time are unmeasured.
+- Decoded textures are never evicted by `ResourceStore`; very long sessions may need an eviction policy.
+- Videos, UI overlays drawn by the host and post-processing follow the PC implementation; none of it has
+  been compared against Xenos output.
+
+## Milestone 1 (black clear) and the PM4-association design
+
 
 ## Gameplay implementation in progress — 2026-10-02
 

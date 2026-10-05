@@ -670,6 +670,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     if (REXCVAR_GET(vulkan_native_shader_features)) {
       XE_UI_VULKAN_FEATURE(shaderInt64)
       XE_UI_VULKAN_FEATURE(shaderSampledImageArrayDynamicIndexing)
+      XE_UI_VULKAN_FEATURE(shaderStorageBufferArrayDynamicIndexing)
       // Fragments and vertices shaded per pass (pipeline statistics for the native
       // renderer). Without the feature the query pool cannot be created.
       XE_UI_VULKAN_FEATURE(pipelineStatisticsQuery)

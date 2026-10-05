@@ -6,8 +6,13 @@ Port experimental da versão Xbox 360 de **Superman Returns** para Nintendo Swit
 `../superman_returns_recomp`.
 
 **Estado: NRO compilado; inicialização parcial no Sudachi, sem teste no console.
-Não é uma versão jogável validada.** O backend inicial é Vulkan/Xenos sobre Mesa NVK. O
-renderizador nativo e as otimizações específicas de NFSMW não são usados.
+Não é uma versão jogável validada.** O padrão (`sr_renderer = "xenos"`) é o backend Xenos sobre
+Mesa NVK. Com `sr_renderer = "native"` o jogo é desenhado pelo **renderer Vulkan do projeto PC**
+(`app/src/pcvk/`, ver [docs/pcvk-import.md](docs/pcvk-import.md) e
+[docs/native-renderer.md](docs/native-renderer.md)): hooks D3D → captura → Vulkan, com shaders
+traduzidos offline (`tools/vkshaders/build_pack.py`). Esse caminho foi validado em GPU de host
+(lavapipe) e com um guest sintético; **ainda não foi compilado em NRO nem visto no console**.
+As otimizações específicas de NFSMW não são usadas.
 
 - `sdk/`: ReXGlue com memória, threads, áudio, entrada libnx e Vulkan do NFSMW-NX.
 - `app/`: aplicativo Superman, manifesto de recompilação e correção de espera XMA.
@@ -15,7 +20,9 @@ renderizador nativo e as otimizações específicas de NFSMW não são usados.
 - `mesa/`: instruções e patch NVK da base; precisa ser compilado separadamente.
 - `config/`: configuração conservadora, resolução original e vídeos habilitados.
 - `shaders/`: geração local da biblioteca SPIR-V `.srsp`, carregada no NRO para
-  identificar recursos; os draws ainda usam Xenos. Veja [pipeline de shaders](docs/shaders.md).
+  identificar recursos; os draws do backend Xenos ainda usam Xenos. Veja [pipeline de shaders](docs/shaders.md).
+- `app/src/pcvk/` e `tools/vkshaders/`: renderer nativo Vulkan importado do projeto PC e o gerador do
+  pack de shaders `.srvk` que ele usa no console. Testes de host: `tests/test_pcvk.sh`.
 
 O manifesto suporta Title ID `454107ED`, Media ID `64A4002A`, versão `0.0.0.1`,
 SHA-256 `c8f243acd99de9a91f5ae4f409721c0e954e3d5eb96861419d3da07b8106db2b`.

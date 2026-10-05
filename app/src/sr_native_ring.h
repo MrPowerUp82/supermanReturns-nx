@@ -62,6 +62,14 @@ struct Services {
   std::function<void()> pause_wait;
   // info, address, reference, mask; the adapter rate-limits by elapsed time.
   std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> report_wait;
+  // Synchronization-only command processor, as in the PC project's native graphics system: the
+  // game's own draws are replayed by the Vulkan renderer from the hooked D3D calls, so the PM4
+  // stream only has to honour the guest's contract (fences, write-backs, interrupts, frame
+  // counter) and the GPU is treated as infinitely fast. Draw, query and extent packets are
+  // consumed with fixed results, nothing waits for native work and unknown opcodes are skipped.
+  bool instant_gpu = false;
+  // The frame counter EVENT_WRITE_SHD writes when its swap flag is set (instant_gpu only).
+  std::function<uint32_t()> frame_counter;
 };
 struct RingCounters {
   uint64_t packets = 0, indirects = 0, draws_omitted = 0;

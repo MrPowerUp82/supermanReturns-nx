@@ -4,12 +4,19 @@
 
 #include "sr_native_system.h"
 
+#include "pcvk/graphics/shaders/shader_pack.h"
+#include "pcvk/native_renderer/frontend.h"
+#include "pcvk/native_renderer/shader_objects.h"
 #include "sr_native_present.h"
 #include "sr_native_ring.h"
 #include "sr_native_shader_safety.h"
+#include "sr_vk_guest_access.h"
+#include "sr_vk_present.h"
+#include "sr_vk_runtime.h"
 
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
+#include <rex/filesystem.h>
 #include <rex/graphics/xenos.h>
 #include <rex/kernel/xboxkrnl/video.h>
 #include <rex/logging.h>
@@ -37,6 +44,9 @@
 #include <unordered_map>
 
 #include <fmt/format.h>
+
+#include <fstream>
+#include <iterator>
 
 namespace sr::native {
 namespace {
@@ -155,8 +165,10 @@ std::atomic<NativeSystem*> g_active_system{nullptr};
 
 class NativeSystem final : public rex::system::IGraphicsSystem {
  public:
-  explicit NativeSystem(bool configuration_valid)
-      : configuration_valid_(configuration_valid), registers_(new std::atomic<uint32_t>[kRegisterCount]) {
+  NativeSystem(bool configuration_valid, bool vulkan_renderer)
+      : configuration_valid_(configuration_valid),
+        vulkan_renderer_(vulkan_renderer),
+        registers_(new std::atomic<uint32_t>[kRegisterCount]) {
     for (uint32_t i = 0; i < kRegisterCount; ++i) registers_[i].store(0, std::memory_order_relaxed);
     g_active_system.store(this, std::memory_order_release);
   }
@@ -170,6 +182,14 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     if (!configuration_valid_) {
       REXLOG_ERROR("[sr-native] invalid renderer configuration; native setup refused");
       return X_STATUS_UNSUCCESSFUL;
+    }
+    if (vulkan_renderer_) {
+      if (vk_presentation_) return X_STATUS_SUCCESS;
+      auto presentation = std::make_unique<vk::Presentation>([this]() { return stop_.cancelled(); });
+      if (!presentation->Initialize(app_context)) return X_STATUS_UNSUCCESSFUL;
+      vk_presentation_ = std::move(presentation);
+      REXLOG_INFO("[sr-vk] SDK provider and presenter created; the PC project's Vulkan renderer will draw");
+      return X_STATUS_SUCCESS;
     }
     if (presentation_) return X_STATUS_SUCCESS;
     auto presentation = std::make_unique<NativePresentation>([this]() { return stop_.cancelled(); });
@@ -194,6 +214,11 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     physical_ = std::make_unique<PhysicalMemory>(memory_);
 
     if (!RegisterMmio()) return X_STATUS_UNSUCCESSFUL;
+    if (vulkan_renderer_ && (!StartVulkanRenderer() || !StartFrontend())) {
+      StopVulkanRenderer();
+      DisableMmio();
+      return X_STATUS_UNSUCCESSFUL;
+    }
 
     last_report_ = Clock::now();
     // Workers are created only after every resource they use is validated. A failure
@@ -209,11 +234,13 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     return X_STATUS_SUCCESS;
   }
 
-  bool has_presentation() const override { return presentation_ && presentation_->presenter(); }
+  bool has_presentation() const override { return presenter() != nullptr; }
   rex::ui::GraphicsProvider* provider() const override {
+    if (vk_presentation_) return vk_presentation_->provider();
     return presentation_ ? presentation_->provider() : nullptr;
   }
   rex::ui::Presenter* presenter() const override {
+    if (vk_presentation_) return vk_presentation_->presenter();
     return presentation_ ? presentation_->presenter() : nullptr;
   }
 
@@ -269,6 +296,9 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     if (quiesced_) return;
     quiesced_ = true;
     DisableMmio();
+    // The front end first: it may be inside the GPU wait of a frame, which must be cancelled
+    // before the guest threads that feed it can be stopped.
+    StopVulkanRenderer();
     bool joined = true;
     if (workers_) {
       stop_.Stop();
@@ -298,8 +328,12 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     QuiesceWorkers();
     if (workers_joined_) {
       presentation_.reset();
+      if (vk_presentation_ && !vk_presentation_->Shutdown())
+        (void)vk_presentation_.release();  // the GPU did not drain: nothing it uses may be freed
+      vk_presentation_.reset();
     } else {
       (void)presentation_.release();
+      (void)vk_presentation_.release();
     }
   }
 
@@ -478,6 +512,15 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
       }
       return safe;
     };
+    if (vulkan_renderer_) {
+      s.instant_gpu = true;
+      s.frame_counter = [this] { return swaps_.load(std::memory_order_acquire); };
+      // The swap only counts frames here; the renderer presents from the hooked D3D swap.
+      s.present = [this](uint32_t, uint32_t, uint32_t) {
+        swaps_.fetch_add(1, std::memory_order_acq_rel);
+        return true;
+      };
+    }
     s.cancelled = [this]() { return stop_.cancelled(); };
     s.pause_wait = [this]() {
       PublishReadPointer();
@@ -520,7 +563,127 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
     }
     if (index == XE_GPU_REG_COHER_STATUS_HOST) value |= 0x80000000u;
     registers_[index].store(value, std::memory_order_release);
+    if (vulkan_renderer_) TrackGammaWrite(index, value);
     return true;
+  }
+
+  // Display gamma ramp (DC_LUT_*), as programmed through the command stream.
+  void TrackGammaWrite(uint32_t index, uint32_t value) {
+    using namespace rex::graphics;
+    const auto reg = [&](uint32_t r) { return registers_[r].load(std::memory_order_acquire); };
+    std::lock_guard<std::mutex> lock(gamma_mutex_);
+    switch (index) {
+      case XE_GPU_REG_DC_LUT_RW_INDEX: gamma_component_ = 0; break;
+      case XE_GPU_REG_DC_LUT_SEQ_COLOR: {
+        const uint32_t rw = reg(XE_GPU_REG_DC_LUT_RW_INDEX) & 0xFF;
+        // Red, green, blue order; the write enable mask is blue, green, red.
+        if (reg(XE_GPU_REG_DC_LUT_WRITE_EN_MASK) & (1u << (2 - std::min(gamma_component_, 2u)))) {
+          const uint32_t c = (value & 0xFFFF) >> 6;
+          const uint32_t shift = gamma_component_ == 0 ? 20 : gamma_component_ == 1 ? 10 : 0;
+          gamma_ramp_[rw] = (gamma_ramp_[rw] & ~(0x3FFu << shift)) | (c << shift);
+        }
+        if (++gamma_component_ >= 3) registers_[XE_GPU_REG_DC_LUT_RW_INDEX].store((rw + 1) & 0xFF);
+        break;
+      }
+      case XE_GPU_REG_DC_LUT_PWL_DATA: {
+        const uint32_t rw = reg(XE_GPU_REG_DC_LUT_RW_INDEX);
+        if (++gamma_component_ >= 3)
+          registers_[XE_GPU_REG_DC_LUT_RW_INDEX].store((rw & ~0x7Fu) | (((rw & 0x7F) + 1) & 0x7F));
+        break;
+      }
+      case XE_GPU_REG_DC_LUT_30_COLOR: {
+        const uint32_t rw = reg(XE_GPU_REG_DC_LUT_RW_INDEX) & 0xFF;
+        const uint32_t mask = reg(XE_GPU_REG_DC_LUT_WRITE_EN_MASK) & 7;
+        uint32_t e = gamma_ramp_[rw];
+        if (mask & 1) e = (e & ~0x3FFu) | (value & 0x3FF);
+        if (mask & 2) e = (e & ~(0x3FFu << 10)) | (value & (0x3FFu << 10));
+        if (mask & 4) e = (e & ~(0x3FFu << 20)) | (value & (0x3FFu << 20));
+        gamma_ramp_[rw] = e;
+        registers_[XE_GPU_REG_DC_LUT_RW_INDEX].store((rw + 1) & 0xFF);
+        break;
+      }
+      default: break;
+    }
+  }
+
+  bool GammaRamp(std::array<uint32_t, 256>& out) {
+    std::lock_guard<std::mutex> lock(gamma_mutex_);
+    std::copy(gamma_ramp_.begin(), gamma_ramp_.end(), out.begin());
+    return true;
+  }
+
+  // --- The PC project's Vulkan renderer ------------------------------------------------
+
+  bool StartVulkanRenderer() {
+    if (!vk_presentation_) {
+      REXLOG_ERROR("[sr-vk] no presentation: SetupPresentation did not run");
+      return false;
+    }
+    const auto folder = rex::filesystem::GetExecutableFolder();
+    std::filesystem::path pack_path = REXCVAR_GET(sr_vk_shader_pack);
+    if (pack_path.empty()) pack_path = folder / "superman_returns_vulkan_shaders.srvk";
+    std::filesystem::path cache_path = REXCVAR_GET(sr_vk_pipeline_cache);
+    if (cache_path.empty()) cache_path = folder / "superman_returns_vulkan_pipelines.bin";
+
+    // The offline shader pack. Without it the renderer still runs, but every draw is skipped
+    // (and counted): say so loudly instead of showing a black screen with no explanation.
+    auto pack = std::make_shared<superman_returns::graphics::shaders::ShaderPack>();
+    {
+      std::ifstream file(pack_path, std::ios::binary);
+      std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+      std::string error;
+      if (!file || bytes.empty()) {
+        REXLOG_ERROR("[sr-vk] shader pack {} is missing: every draw will be skipped. Build it with "
+                     "tools/vkshaders/build_pack.py", pack_path.string());
+      } else if (!pack->Load(std::move(bytes), error)) {
+        REXLOG_ERROR("[sr-vk] shader pack {} rejected: {}", pack_path.string(), error);
+      } else {
+        REXLOG_INFO("[sr-vk] shader pack {}: {} shaders", pack_path.string(), pack->size());
+      }
+    }
+    shader_lookup_ = std::make_shared<superman_returns::graphics::shaders::PackShaderLookup>(pack);
+    std::string error;
+    if (!vk_presentation_->StartRenderer(
+            [lookup = shader_lookup_](const superman_returns::graphics::guest::ShaderCapture& capture) {
+              return (*lookup)(capture);
+            },
+            cache_path, error)) {
+      REXLOG_ERROR("[sr-vk] renderer failed to start: {}", error);
+      return false;
+    }
+    return true;
+  }
+
+  // Needs the guest memory, which only exists once SetupGuestGpu reached this point.
+  bool StartFrontend() {
+    guest_access_ = std::make_unique<vk::SdkGuestAccess>(memory_);
+    superman_returns::native::FrontendOptions options;
+    options.worker_lag = REXCVAR_GET(sr_vk_worker_lag);
+    options.texture_per_frame_max_bytes = uint32_t(std::max(0, REXCVAR_GET(sr_vk_texture_per_frame_max_kb))) * 1024u;
+    options.large_texture_recheck_frames = uint32_t(std::max(1, REXCVAR_GET(sr_vk_large_texture_recheck_frames)));
+    frontend_ = std::make_unique<superman_returns::native::Frontend>(*guest_access_, options);
+    frontend_->SetLoggers([](const std::string& line) { REXLOG_INFO("[sr-vk] {}", line); },
+                          [](const std::string& line) { REXLOG_WARN("[sr-vk] {}", line); });
+    frontend_->SetShaderLookup([](uint32_t object) { return vk::ShaderObjectRegistry().Find(object); });
+    frontend_->SetGammaSource([this](std::array<uint32_t, 256>& out) { return GammaRamp(out); });
+    vk::Presentation* presentation = vk_presentation_.get();
+    if (!frontend_->Start(
+            [presentation](superman_returns::graphics::guest::RenderPacket&& packet, std::string& diagnostic) {
+              return presentation->Submit(std::move(packet), diagnostic);
+            },
+            [presentation] { presentation->Cancel(); })) {
+      REXLOG_ERROR("[sr-vk] the front end worker could not start");
+      return false;
+    }
+    vk::SetActive(frontend_.get(), guest_access_.get());
+    REXLOG_INFO("[sr-vk] D3D hooks active: draws are captured and recorded by the Vulkan renderer");
+    return true;
+  }
+
+  void StopVulkanRenderer() {
+    if (!frontend_) return;
+    vk::SetActive(nullptr, nullptr);  // hooks fall back to the plain originals
+    frontend_->Stop();                 // joins the worker; the presentation stays for Shutdown
   }
 
   bool DeliverInterrupt(uint32_t source, uint32_t cpu) {
@@ -728,14 +891,38 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
         kind, c.packets, c.indirects, c.swap_requests, c.refresh_completed, c.draws_omitted, c.blocked,
         c.invalid, c.interrupts, vblanks_.load(std::memory_order_relaxed),
         mmio_wptr_writes_.load(std::memory_order_relaxed), NativeProgress(),
-        presentation_ ? presentation_->surface_paints() : 0,
+        vk_presentation_ ? vk_presentation_->surface_paints()
+                         : (presentation_ ? presentation_->surface_paints() : 0),
         shutdown_complete ? " shutdown=complete" : "");
+    if (vulkan_renderer_ && frontend_) {
+      const auto& f = frontend_->stats();
+      REXLOG_INFO(
+          "[sr-vk] summary kind={} commands={} batches={} swaps={} capture_failures={} decode_failures={} "
+          "sink_failures={} texture_failures={} ring_resyncs={} buffers={} buffer_uploads={} upload_mb={} "
+          "frames={} composed={} compose_failures={} pack_misses={}",
+          kind, f.commands.load(), f.batches.load(), f.swaps.load(), f.capture_failures.load(),
+          f.decode_failures.load(), f.sink_failures.load(), f.texture_failures.load(), f.ring_resyncs.load(),
+          f.buffers_tracked.load(), f.buffer_uploads.load(), f.buffer_upload_bytes.load() >> 20,
+          vk_presentation_ ? vk_presentation_->stats().frames.load() : 0,
+          vk_presentation_ ? vk_presentation_->stats().composed.load() : 0,
+          vk_presentation_ ? vk_presentation_->stats().failures.load() : 0,
+          shader_lookup_ ? shader_lookup_->misses() : 0);
+    }
   }
 
   // --- State ---------------------------------------------------------------------------------
 
   const bool configuration_valid_;
+  const bool vulkan_renderer_;
   std::unique_ptr<NativePresentation> presentation_;
+  std::unique_ptr<vk::Presentation> vk_presentation_;
+  std::unique_ptr<vk::SdkGuestAccess> guest_access_;
+  std::unique_ptr<superman_returns::native::Frontend> frontend_;
+  std::shared_ptr<superman_returns::graphics::shaders::PackShaderLookup> shader_lookup_;
+  std::atomic<uint32_t> swaps_{0};
+  std::mutex gamma_mutex_;
+  std::array<uint32_t, 256> gamma_ramp_{};
+  uint32_t gamma_component_ = 0;
   rex::runtime::FunctionDispatcher* dispatcher_ = nullptr;
   rex::system::KernelState* kernel_state_ = nullptr;
   rex::memory::Memory* memory_ = nullptr;
@@ -781,8 +968,9 @@ class NativeSystem final : public rex::system::IGraphicsSystem {
 
 }  // namespace
 
-std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem(bool configuration_valid) {
-  return std::make_unique<NativeSystem>(configuration_valid);
+std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem(bool configuration_valid,
+                                                                   bool vulkan_renderer) {
+  return std::make_unique<NativeSystem>(configuration_valid, vulkan_renderer);
 }
 
 bool QuiesceNativeGraphicsSystem(rex::system::IGraphicsSystem* system) {

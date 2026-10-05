@@ -10,6 +10,18 @@ That local project has no separate LICENSE file; publication of those hooks
 requires establishing their licensing. No original game files or generated
 game code are included in the source repository. See `docs/provenance.json`.
 
+## Native Vulkan renderer (imported from the PC project)
+
+`app/src/pcvk/` and `tools/vkshaders/` come from the author's own
+[superman_returns_recomp](https://github.com/MrPowerUp82/superman_returns_recomp) at
+`f5ac13b3aa6623cc022c59624c978cd2b5280bbf` (no LICENSE file there; same author). That project in turn
+adapts [crazyriddler/rexglue-native-kit](https://github.com/crazyriddler/rexglue-native-kit) at
+`136bc6c4` (no license file at that revision; the origin comments are kept in the headers) and uses
+[zolaware/reblue-XenosRecomp](https://github.com/zolaware/reblue-XenosRecomp) (MIT, via hedge-dev/XenosRecomp)
+at `339af41d` plus the 13 patches in `tools/vkshaders/xenosrecomp/patches`. The translator is fetched
+into `.tools/` by `tools/vkshaders/fetch_xenosrecomp.py` and is not redistributed. Shader packs and
+translated shaders are derived from the game and stay local. See [docs/pcvk-import.md](docs/pcvk-import.md).
+
 ## Native renderer (adapted from nfsmw-nx)
 
 The gameplay continuation records Superman XDK addresses and layout facts from

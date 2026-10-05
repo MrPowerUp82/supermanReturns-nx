@@ -6,3 +6,9 @@ input_xbox_layout = false
 sr_skip_intro = false
 # Disable the fork's NFSMW-specific IO tuning until tested with AST streaming.
 nfsmw_io_rangos_mb = 0
+
+# Native renderer (see docs/native-renderer.md). Needs superman_returns_vulkan_shaders.srvk
+# next to the NRO. Default is the Xenos backend.
+# sr_renderer = "native"
+# sr_vk = true
+# sr_vk_worker_lag = true
