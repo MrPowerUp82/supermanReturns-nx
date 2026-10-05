@@ -13,7 +13,7 @@ set(SR_PCVK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/pcvk")
 add_subdirectory("${SR_PCVK_DIR}" pcvk)
 
 add_executable(sr_pcvk_native_tests
-  native/main.cpp native/test_checked_guest_memory.cpp native/test_shader_requirements.cpp
+  native/main.cpp native/test_shader_requirements.cpp
   native/test_guest_state.cpp native/test_render_packets.cpp native/test_render_state.cpp
   native/test_vertex_layout.cpp native/test_primitive_expansion.cpp native/test_texture.cpp
   native/test_pm4_mirror.cpp native/test_game_profile.cpp

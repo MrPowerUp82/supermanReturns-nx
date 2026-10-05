@@ -123,7 +123,7 @@
     "url": "https://github.com/MrPowerUp82/superman_returns_recomp",
     "commit": "f5ac13b3aa6623cc022c59624c978cd2b5280bbf",
     "imported_to": "app/src/pcvk",
-    "files": ["port/src/graphics/guest/*", "port/src/graphics/vulkan/{context,loader,policy,device_requirements,descriptors,descriptor_sets,resources,image_state,render_targets,game_pipeline,game_renderer,depth_resolve,resolve,composition,game_frame}.*", "port/src/graphics/shaders/*", "port/src/native_renderer/{pm4_mirror,game_profile,checked_guest_memory,shader_container,index_endian,xenos_tiling,shader_pack,vertex_signature,texture_binding}.*"],
+    "files": ["port/src/graphics/guest/*", "port/src/graphics/vulkan/{context,loader,policy,device_requirements,descriptors,descriptor_sets,resources,image_state,render_targets,game_pipeline,game_renderer,depth_resolve,resolve,composition,game_frame}.*", "port/src/graphics/shaders/*", "port/src/native_renderer/{pm4_mirror,game_profile,shader_container,index_endian,xenos_tiling,shader_pack,vertex_signature,texture_binding}.*"],
     "tools_imported_to": "tools/vkshaders",
     "tools": ["tools/shaders/{runtime_vulkan_shader,compile_vulkan,spirv_metadata,vulkan_contract,validate_vulkan_corpus,fetch_xenosrecomp,srpaths}.py", "tools/shaders/xenosrecomp/{CMakeLists.txt,corpus_main.cpp,pch_corpus.h,patches/*}"],
     "xenosrecomp_upstream": {"url": "https://github.com/zolaware/reblue-XenosRecomp", "commit": "339af41df2c23dbe3256c1c377716b81a0e0fe6b", "patches": "tools/vkshaders/xenosrecomp/patches (0001-0013)"},
