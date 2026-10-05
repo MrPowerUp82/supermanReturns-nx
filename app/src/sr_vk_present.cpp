@@ -9,6 +9,7 @@
 #include <rex/ui/windowed_app_context.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <variant>
 
@@ -61,6 +62,7 @@ struct Presentation::State {
   size_t next_framebuffer = 0;
   uint64_t serial = 0;
   bool in_flight = false, lost = false, renderer_started = false;
+  std::atomic<bool> cancel_requested{false};  // Cancel(): waits give up even before system shutdown starts
   PresentationStats stats;
   Clock::time_point last_report{};
 
@@ -162,7 +164,8 @@ struct Presentation::State {
   }
 
   enum class Wait { kDone, kCancelled, kLost, kFailed };
-  Wait WaitFence(unsigned max_slices) {
+  // `honor_cancel` is false during teardown: the GPU must be drained even after Cancel().
+  Wait WaitFence(unsigned max_slices, bool honor_cancel = true) {
     for (unsigned slice = 0; slice < max_slices; ++slice) {
       switch (context.f.vkWaitForFences(context.device, 1, &fence, VK_TRUE, kFenceSliceNs)) {
         case VK_SUCCESS: return Wait::kDone;
@@ -170,7 +173,7 @@ struct Presentation::State {
         case VK_ERROR_DEVICE_LOST: return Wait::kLost;
         default: return Wait::kFailed;
       }
-      if (cancelled && cancelled()) return Wait::kCancelled;
+      if (honor_cancel && (cancel_requested.load() || (cancelled && cancelled()))) return Wait::kCancelled;
     }
     return Wait::kCancelled;
   }
@@ -259,7 +262,7 @@ struct Presentation::State {
   bool Teardown() {
     if (in_flight) {
       // A submission is still unresolved: nothing it uses may be destroyed.
-      if (WaitFence(kTeardownSlices) != Wait::kDone && !lost) return false;
+      if (WaitFence(kTeardownSlices, false) != Wait::kDone && !lost) return false;
       in_flight = false;
     }
     if (device()) context.f.vkDeviceWaitIdle(context.device);
@@ -418,7 +421,9 @@ bool Presentation::Submit(guest::RenderPacket&& packet, std::string& diagnostic)
 }
 
 void Presentation::Cancel() {
-  if (state_ && state_->game) state_->game->Cancel();
+  if (!state_) return;
+  state_->cancel_requested.store(true);
+  if (state_->game) state_->game->Cancel();
 }
 
 bool Presentation::Shutdown() {

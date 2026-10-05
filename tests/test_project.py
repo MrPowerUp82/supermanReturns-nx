@@ -88,6 +88,28 @@ class PackageValidationTests(unittest.TestCase):
                 project.package(args)
         self.assertFalse(args.output.exists())
 
+    def test_vulkan_shader_pack_is_validated_and_copied(self):
+        pack = self.root / 'local.srvk'
+        pack.write_bytes(struct.pack('<8sIIIIQ', b'SRVKPK01', 1, 1, 1, 0, 0))
+        args = self.args()
+        args.vulkan_shader_pack = pack
+        with patch.object(project, 'XEX_SHA256', self.hash):
+            project.package(args)
+        self.assertEqual((args.output / 'superman_returns_vulkan_shaders.srvk').read_bytes(), pack.read_bytes())
+
+    def test_rejects_wrong_vulkan_shader_pack_before_copy(self):
+        for header in (struct.pack('<8sIIIIQ', b'SRVKPK02', 1, 1, 1, 0, 0),
+                       struct.pack('<8sIIIIQ', b'SRVKPK01', 1, 2, 1, 0, 0),
+                       struct.pack('<8sIIIIQ', b'SRVKPK01', 1, 1, 0, 0, 0)):
+            pack = self.root / 'bad.srvk'
+            pack.write_bytes(header)
+            args = self.args()
+            args.vulkan_shader_pack = pack
+            with patch.object(project, 'XEX_SHA256', self.hash):
+                with self.assertRaisesRegex(ValueError, 'Vulkan shader pack'):
+                    project.package(args)
+            self.assertFalse(args.output.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -119,6 +119,17 @@ def package(args):
         if magic != b'SRSSPV\0\0' or version != 1 or not 1 <= count <= 4096:
             raise ValueError('Invalid Superman shader library header')
         # Full entry, checksum and SPIR-V validation is performed by the NRO loader.
+    vulkan_pack = getattr(args, 'vulkan_shader_pack', None)
+    if vulkan_pack:
+        vulkan_pack = vulkan_pack.resolve()
+        if not vulkan_pack.is_file() or not 32 <= vulkan_pack.stat().st_size <= 256 * 1024 * 1024:
+            raise ValueError('Missing or oversized Vulkan shader pack')
+        with vulkan_pack.open('rb') as stream:
+            header = stream.read(32)
+        magic, version, abi, count, _, _ = struct.unpack('<8sIIIIQ', header)
+        if magic != b'SRVKPK01' or version != 1 or abi != 1 or not 1 <= count <= 1 << 20:
+            raise ValueError('Invalid Vulkan shader pack header')
+        # Entry bounds and the integrity hash are checked by the NRO loader.
     target = args.output.resolve()
     # Refuse overwrites and source nesting: do not recursively copy into game data.
     if target.exists():
@@ -130,6 +141,8 @@ def package(args):
     shutil.copy2(ROOT / 'config/superman_returns.toml', target / 'superman_returns.toml')
     if shader_library:
         shutil.copy2(shader_library, target / 'superman_returns_shaders.srsp')
+    if vulkan_pack:
+        shutil.copy2(vulkan_pack, target / 'superman_returns_vulkan_shaders.srvk')
     shutil.copytree(game, target / 'game_root')
     print(f'Local package: {target}. Copy this folder to sdmc:/switch/superman-returns-nx/')
 
@@ -151,6 +164,8 @@ def main(argv=None):
     cmd.add_argument('--nro', type=Path, default=ROOT / 'app/out/switch/superman_returns.nro')
     cmd.add_argument('--game-root', type=Path)
     cmd.add_argument('--shader-library', type=Path, help='Optional local SRSSPV library for shader identification')
+    cmd.add_argument('--vulkan-shader-pack', type=Path,
+                     help='Optional pack built by tools/vkshaders/build_pack.py for the native Vulkan renderer')
     cmd.add_argument('--output', type=Path, default=ROOT / 'dist/superman-returns-nx')
     cmd.set_defaults(action=package)
     args = parser.parse_args(argv)
