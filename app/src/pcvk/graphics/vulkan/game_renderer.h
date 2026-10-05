@@ -6,7 +6,7 @@
 namespace superman_returns::graphics::vulkan {
 using ShaderLookup=std::function<shaders::ShaderResult(const guest::ShaderCapture&)>;
 using TextureDecoder=std::function<bool(const guest::TextureCapture&,guest::LinearTexture&,std::string&)>;
-struct GameRenderStats {uint64_t draws=0,pending=0,failed=0,clears=0;};
+struct GameRenderStats {uint64_t draws=0,pending=0,failed=0,clears=0,skipped_shaders=0;};
 class GameRenderer {
 public:
   GameRenderer(Context& c,ShaderLookup shaders,TextureDecoder decoder={},AliasOptions aliases={}):c_(c),shaders_(std::move(shaders)),decoder_(std::move(decoder)),state_(c.f),resources_(c),targets_(c,state_),descriptors_(c),pipelines_(c),depth_resolver_(c),alias_options_(aliases) {

@@ -27,10 +27,14 @@ add_executable(sr_pcvk_vulkan_tests
   vulkan/main.cpp vulkan/test_context.cpp vulkan/test_descriptors.cpp
   vulkan/test_device_requirements.cpp vulkan/test_game_pipeline.cpp vulkan/test_image_state.cpp
   vulkan/test_render_targets.cpp vulkan/test_resolve.cpp vulkan/test_resources.cpp
-  vulkan/test_shader_service.cpp vulkan/test_composition.cpp)
+  vulkan/test_shader_service.cpp vulkan/test_composition.cpp vulkan/test_shader_pack.cpp)
 target_include_directories(sr_pcvk_vulkan_tests PRIVATE native "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src")
 target_link_libraries(sr_pcvk_vulkan_tests PRIVATE sr_pcvk_vulkan sr_pcvk_shader_service)
 add_test(NAME sr_pcvk_vulkan_tests COMMAND sr_pcvk_vulkan_tests)
+
+add_executable(sr_pcvk_pack_check vulkan/pack_check.cpp)
+target_link_libraries(sr_pcvk_pack_check PRIVATE sr_pcvk_vulkan)
+target_include_directories(sr_pcvk_pack_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src")
 
 # GPU fixtures: real recording through the production renderer on whatever Vulkan device is
 # present (lavapipe works), with readback of the pixels. Need DXC for the test HLSL.

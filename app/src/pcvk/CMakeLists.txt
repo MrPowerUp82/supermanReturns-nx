@@ -29,7 +29,7 @@ add_library(sr_pcvk_frontend STATIC native_renderer/frontend.cpp)
 target_link_libraries(sr_pcvk_frontend PUBLIC sr_pcvk_guest)
 
 add_library(sr_pcvk_vulkan STATIC
-  graphics/shaders/shader_result.cpp
+  graphics/shaders/shader_result.cpp graphics/shaders/shader_pack.cpp
   graphics/vulkan/spirv.cpp graphics/vulkan/loader.cpp graphics/vulkan/policy.cpp graphics/vulkan/context.cpp
   graphics/vulkan/device_requirements.cpp graphics/vulkan/descriptors.cpp graphics/vulkan/descriptor_sets.cpp
   graphics/vulkan/resources.cpp graphics/vulkan/image_state.cpp graphics/vulkan/render_targets.cpp

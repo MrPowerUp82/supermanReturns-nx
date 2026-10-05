@@ -161,6 +161,11 @@ bool GameRenderer::Draw(const guest::DrawPacket& draw,VkCommandBuffer command,Er
   if(!draw.vertex_shader || !shaders_) return Fail(e,"Captured vertex shader/lookup absent");
   auto vs=shaders_(*draw.vertex_shader);shaders::ShaderResult ps{shaders::ShaderPoll::ready,{},{}};
   if(draw.pixel_shader) ps=shaders_(*draw.pixel_shader);
+  if((vs.status==shaders::ShaderPoll::unavailable || ps.status==shaders::ShaderPoll::unavailable) && vs.status!=shaders::ShaderPoll::failed && ps.status!=shaders::ShaderPoll::failed) {
+    // Not in the offline pack: skip the draw (its buffer updates were already consumed above).
+    if(++stats_.skipped_shaders<=16) c_.Log("Skipping draw: shader not in the offline pack (VS="+std::to_string(draw.vertex_shader->hash)+", PS="+std::to_string(draw.pixel_shader?draw.pixel_shader->hash:0)+")");
+    e={};return true;
+  }
   if(vs.status==shaders::ShaderPoll::failed || ps.status==shaders::ShaderPoll::failed) {e={"Game shader",VK_ERROR_INITIALIZATION_FAILED,vs.status==shaders::ShaderPoll::failed?vs.diagnostic:ps.diagnostic};return false;}
   if(vs.status==shaders::ShaderPoll::pending || ps.status==shaders::ShaderPoll::pending) {++stats_.pending;e={"Game shader",VK_NOT_READY,"Captured shader compilation pending"};return false;}
   if(!vs.artifact || (draw.pixel_shader && !ps.artifact)) return Fail(e,"Ready shader has no owned artifact");

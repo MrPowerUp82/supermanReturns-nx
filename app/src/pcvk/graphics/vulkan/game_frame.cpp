@@ -34,14 +34,17 @@ bool GameFrame::WaitFence(Error& e) {
 bool GameFrame::WaitShaders(Error& e) {
   std::vector<std::shared_ptr<const guest::ShaderCapture>> captures;
   for(auto& packet:packets_) if(auto* draw=std::get_if<guest::DrawPacket>(&packet);draw && draw->count) {
-    if(!draw->vertex_shader) {e={"Game shader",VK_ERROR_INITIALIZATION_FAILED,"Draw has no captured vertex shader"};return false;}
+    if(!draw->vertex_shader) {
+      if(skip_failed_draws) continue;  // the draw itself is skipped (and counted) when recorded
+      e={"Game shader",VK_ERROR_INITIALIZATION_FAILED,"Draw has no captured vertex shader"};return false;
+    }
     for(auto& shader:{draw->vertex_shader,draw->pixel_shader}) if(shader && std::find(captures.begin(),captures.end(),shader)==captures.end()) captures.push_back(shader);
   }
   const auto deadline=std::chrono::steady_clock::now()+std::chrono::minutes(10);
   auto next_log=std::chrono::steady_clock::now();
   for(;;) {
     bool ready=true;
-    for(auto& capture:captures) {auto result=shaders_(*capture);if(result.status==shaders::ShaderPoll::failed) {e={"Game shader",VK_ERROR_INITIALIZATION_FAILED,result.diagnostic};return false;}ready&=result.status==shaders::ShaderPoll::ready;}
+    for(auto& capture:captures) {auto result=shaders_(*capture);if(result.status==shaders::ShaderPoll::failed) {e={"Game shader",VK_ERROR_INITIALIZATION_FAILED,result.diagnostic};return false;}ready&=result.status==shaders::ShaderPoll::ready || result.status==shaders::ShaderPoll::unavailable;}
     if(ready) return true;
     if(compilation_progress) compilation_progress();
     if(std::chrono::steady_clock::now()>=next_log) {c_.Log("Preparing native Vulkan frame: waiting for "+std::to_string(captures.size())+" owned shader containers");next_log=std::chrono::steady_clock::now()+std::chrono::seconds(5);}
@@ -77,7 +80,18 @@ bool GameFrame::Enqueue(guest::RenderPacket&& packet,std::shared_ptr<TextureReso
   std::error_code trigger_error;
   const bool dump=(dump_frame && serial_==dump_frame) || (dump_trigger && std::filesystem::remove(dump_trigger,trigger_error));
   if(dump) renderer_.BeginDump();
-  for(size_t i=0;i<packets_.size();++i) if(!renderer_.Record(packets_[i],command_,e)) {e.message+=" (frame packet "+std::to_string(i)+", kind="+std::to_string(packets_[i].index())+")";return fail();}
+  for(size_t i=0;i<packets_.size();++i) if(!renderer_.Record(packets_[i],command_,e)) {
+    // A draw the renderer cannot express (unsupported texture format, pipeline rejected by the
+    // driver) costs that draw, not the session, when the owner opted in. Device loss and memory
+    // exhaustion are never skipped.
+    const bool draw=std::holds_alternative<guest::DrawPacket>(packets_[i]);
+    const bool fatal=e.result==VK_ERROR_DEVICE_LOST || e.result==VK_ERROR_OUT_OF_HOST_MEMORY || e.result==VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    if(skip_failed_draws && draw && !fatal) {
+      if(++skipped_draws_<=16) c_.Log("Skipped native Vulkan draw ("+e.operation+": "+e.message+")");
+      e={};continue;
+    }
+    e.message+=" (frame packet "+std::to_string(i)+", kind="+std::to_string(packets_[i].index())+")";return fail();
+  }
   if(dump && !renderer_.DumpTargets(command_,e)) return fail();
   renderer_.FinishSubmission();
   auto source=renderer_.SelectFrontbuffer(std::get<guest::SwapPacket>(packet),e);if(!source) return fail();
@@ -122,7 +136,7 @@ bool GameFrame::Enqueue(guest::RenderPacket&& packet,std::shared_ptr<TextureReso
   const auto finished=std::chrono::steady_clock::now();
   auto ms=[](auto a,auto b) {return std::chrono::duration_cast<std::chrono::milliseconds>(b-a).count();};
   if(serial_==1 || serial_%120==0 || ms(started,finished)>100) {
-    auto stats=renderer_.Stats();c_.Log("Submitted native Vulkan frame="+std::to_string(serial_)+", draws="+std::to_string(stats.draws)+", pending="+std::to_string(stats.pending)+", failed="+std::to_string(stats.failed)+", shaders_ms="+std::to_string(ms(started,shaders_ready))+", fence_ms="+std::to_string(ms(shaders_ready,fence_ready))+", queue_ms="+std::to_string(ms(submit_started,queue_ready))+", record_submit_ms="+std::to_string(ms(record_started,submit_started)+ms(queue_ready,finished))+", packets="+std::to_string(packets_.size()));
+    auto stats=renderer_.Stats();c_.Log("Submitted native Vulkan frame="+std::to_string(serial_)+", draws="+std::to_string(stats.draws)+", pending="+std::to_string(stats.pending)+", failed="+std::to_string(stats.failed)+", shaders_ms="+std::to_string(ms(started,shaders_ready))+", fence_ms="+std::to_string(ms(shaders_ready,fence_ready))+", queue_ms="+std::to_string(ms(submit_started,queue_ready))+", record_submit_ms="+std::to_string(ms(record_started,submit_started)+ms(queue_ready,finished))+", skipped_draws="+std::to_string(skipped_draws_)+", skipped_shaders="+std::to_string(stats.skipped_shaders)+", packets="+std::to_string(packets_.size()));
   }
   packets_.clear();return true;
 }

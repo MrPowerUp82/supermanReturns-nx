@@ -27,6 +27,9 @@ public:
   bool Enqueue(guest::RenderPacket&&,std::shared_ptr<TextureResource>&,Error&);
   void Cancel() {cancelled_.store(true);}
   std::function<void()> compilation_progress;
+  // Skip (and count) draws that fail for a per-draw reason instead of stopping the renderer.
+  bool skip_failed_draws=false;
+  uint64_t skipped_draws() const {return skipped_draws_;}
   GameRenderer& Renderer() {return renderer_;}
 private:
   bool WaitShaders(Error&);
@@ -38,6 +41,7 @@ private:
   std::vector<std::shared_ptr<TextureResource>> snapshots_;
   VkFence fence_=VK_NULL_HANDLE;uint64_t serial_=0;bool submitted_=false,failed_=false;
   std::atomic<bool> cancelled_{false};
+  uint64_t skipped_draws_=0;
   std::chrono::steady_clock::time_point cache_checkpoint_{};
 };
 }

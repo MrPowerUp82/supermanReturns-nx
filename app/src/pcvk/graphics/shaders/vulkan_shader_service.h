@@ -9,7 +9,9 @@
 #include <stop_token>
 namespace superman_returns::graphics::shaders {
 using ShaderKey=uint64_t;
-enum class ShaderPoll {pending,ready,failed};
+// `unavailable`: the shader is known to be absent (not in the offline pack). Draws using it are
+// skipped and counted; unlike `failed` it does not stop the frame.
+enum class ShaderPoll {pending,ready,failed,unavailable};
 struct ShaderLocation {uint32_t location;std::string type;};
 struct CompiledShader {
   ShaderStage stage=ShaderStage::kVertex;
