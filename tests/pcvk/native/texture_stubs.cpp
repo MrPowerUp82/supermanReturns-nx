@@ -1,14 +1,14 @@
-// The Xenos texture decoder needs the ReXGlue SDK. The front-end host tests never bind a
-// texture, so these stand-ins only have to link (and fail loudly if they are ever reached).
+// The Xenos texture decoder needs the ReXGlue SDK. The host tests stand in for the one function
+// the guest layer calls from it: a bound texture is one 4 KB range at the fetch constant's base.
 #include "pcvk/graphics/guest/texture_capture.h"
 namespace superman_returns::graphics::guest {
-bool DescribeTextureRanges(std::span<const uint32_t, 6>, std::vector<TextureRange>&, std::string& error) {
-  error = "texture decoder not available in host tests";
-  return false;
-}
-bool CaptureTexture(std::span<const uint32_t, 6>, uint64_t, const GuestMemoryReader&,
-                    std::shared_ptr<const TextureCapture>&, std::string& error) {
-  error = "texture decoder not available in host tests";
-  return false;
+bool DescribeTextureRanges(std::span<const uint32_t, 6> fetch, std::vector<TextureRange>& ranges,
+                           std::string& error) {
+  if ((fetch[0] & 3) != 2) {
+    error = "not a texture fetch constant";
+    return false;
+  }
+  ranges = {{fetch[1] & ~0xFFFu, 4096}};
+  return true;
 }
 }  // namespace superman_returns::graphics::guest

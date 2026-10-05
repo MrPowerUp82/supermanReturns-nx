@@ -13,14 +13,16 @@ add_library(sr_pcvk_guest STATIC
   native_renderer/pm4_mirror.cpp
   graphics/guest/captured_batch.cpp graphics/guest/constant_snapshot.cpp graphics/guest/draw_state.cpp
   graphics/guest/edram_alias.cpp graphics/guest/pm4_capture.cpp graphics/guest/primitive_expansion.cpp
-  graphics/guest/render_packet.cpp graphics/guest/render_state.cpp graphics/guest/vertex_layout.cpp)
+  graphics/guest/render_packet.cpp graphics/guest/render_state.cpp graphics/guest/texture_capture.cpp
+  graphics/guest/vertex_layout.cpp)
 target_include_directories(sr_pcvk_guest PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/native_renderer"
   "${CMAKE_CURRENT_SOURCE_DIR}/graphics/guest")
 target_compile_features(sr_pcvk_guest PUBLIC cxx_std_23)
 
-# Xenos texture decode: needs the ReXGlue SDK (texture formats/info/conversion), so it is
-# linked only into the game, never into the SDK-free host tests.
-add_library(sr_pcvk_texture STATIC EXCLUDE_FROM_ALL graphics/guest/texture_capture.cpp graphics/guest/texture_layout.cpp)
+# Xenos texture decode (DescribeTextureRanges, DecodeTextureLayout): needs the ReXGlue SDK
+# (texture formats/info/conversion), so it is linked only into the game; the SDK-free host tests
+# provide a stand-in for DescribeTextureRanges.
+add_library(sr_pcvk_texture STATIC EXCLUDE_FROM_ALL graphics/guest/texture_layout.cpp)
 target_link_libraries(sr_pcvk_texture PUBLIC sr_pcvk_guest)
 
 # Guest-thread capture (hooked D3D call -> WorkBatch -> RenderPacket worker). SDK-free except

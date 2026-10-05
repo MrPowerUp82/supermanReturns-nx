@@ -165,8 +165,13 @@ class Frontend {
     uint32_t index_endian = 0;
     uint32_t reset_index = UINT32_MAX;
   };
+  // The bytes of a captured texture stay alive only while a queued command carries them
+  // (`full`); later binds of the unchanged texture carry `light`: same fetch constant, version
+  // and ranges but no bytes, which is all the renderer needs once it uploaded that version.
+  // Without this every texture the game ever bound would stay in memory twice.
   struct CapturedTextureEntry {
-    std::shared_ptr<const graphics::guest::TextureCapture> snapshot;
+    std::weak_ptr<const graphics::guest::TextureCapture> full;
+    std::shared_ptr<const graphics::guest::TextureCapture> light;
     uint64_t content_hash = 0, checked_frame = ~0ull;
   };
 

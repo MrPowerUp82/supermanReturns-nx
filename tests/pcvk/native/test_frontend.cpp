@@ -3,6 +3,7 @@
 #include <atomic>
 #include <bit>
 #include <cstring>
+#include <functional>
 #include <mutex>
 
 #include "pcvk/graphics/guest/render_packet.h"
@@ -24,8 +25,14 @@ using fake::kDevice;using fake::kRing;using fake::kDecl;using fake::kVertexBuffe
 struct Collector {
   std::mutex mutex;
   std::vector<guest::RenderPacket> packets;
+  // When set, packets are examined and released (like the renderer does) instead of retained.
+  std::function<void(const guest::RenderPacket&)> observe;
   bool Take(guest::RenderPacket&& p, std::string&) {
     std::lock_guard<std::mutex> lock(mutex);
+    if (observe) {
+      observe(p);
+      return true;
+    }
     packets.push_back(std::move(p));
     return true;
   }
@@ -253,4 +260,41 @@ SR_TEST(frontend_worker_runs_on_a_large_stack) {
   SR_CHECK(thread.started());
   thread.Join();
   SR_CHECK(ok.load());
+}
+
+SR_TEST(frontend_texture_bytes_are_carried_once_and_again_only_when_they_change) {
+  Harness h;
+  SetUpTriangle(h);
+  constexpr uint32_t kTextureBase = 0x300000;  // physical
+  struct Seen { uint64_t version; std::vector<uint8_t> bytes; };
+  std::vector<Seen> seen;
+  // Like the renderer, examine each draw and let go of it.
+  h.collector.observe = [&](const guest::RenderPacket& p) {
+    const auto* d = std::get_if<guest::DrawPacket>(&p);
+    if (!d || !d->textures[0]) return;
+    Seen s{d->textures[0]->version, {}};
+    try {
+      auto b = d->textures[0]->memory.Read(0xA0000000u + kTextureBase, 4);
+      s.bytes.assign(b.begin(), b.end());
+    } catch (const std::out_of_range&) {}
+    seen.push_back(std::move(s));
+  };
+  const uint32_t slot0 = kDevice + profile::kDevice.fetch_constants;
+  h.guest.Put32(slot0, 2);  // a bound texture
+  h.guest.Put32(slot0 + 4, kTextureBase | 6);
+  h.guest.PutPhysical32(kTextureBase, 0x11223344);
+  h.frontend.DrawVertices(h.base(), 4, 0, 3);
+  h.frontend.OnSwap(h.base(), 0, 1);  // the worker has finished and released the first draw
+  h.frontend.DrawVertices(h.base(), 4, 0, 3);
+  h.frontend.OnSwap(h.base(), 0, 2);
+  h.guest.PutPhysical32(kTextureBase, 0x55667788);
+  h.frontend.DrawVertices(h.base(), 4, 0, 3);
+  h.frontend.OnSwap(h.base(), 0, 3);
+  SR_CHECK_EQ(seen.size(), size_t(3));
+  if (seen.size() != 3) return;
+  SR_CHECK((seen[0].bytes == std::vector<uint8_t>{0x11, 0x22, 0x33, 0x44}));  // first bind carries the bytes
+  SR_CHECK_EQ(seen[1].version, seen[0].version);                                // the same capture version...
+  SR_CHECK(seen[1].bytes.empty());                                              // ...without its bytes
+  SR_CHECK(seen[2].version != seen[0].version);                                 // rewritten texture
+  SR_CHECK((seen[2].bytes == std::vector<uint8_t>{0x55, 0x66, 0x77, 0x88}));
 }

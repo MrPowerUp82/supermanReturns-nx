@@ -251,19 +251,17 @@ void Frontend::CaptureTextures(uint8_t* base) {
     }
     if (!IsTextureBound(fetch[0])) continue;
     auto& entry = captured_textures_[fetch];
-    bool dirty = !entry.snapshot;
-    if (entry.snapshot && entry.checked_frame != front_frame_) {
+    bool dirty = !entry.light;
+    if (entry.light && entry.checked_frame != front_frame_) {
       uint64_t total = 0;
-      for (const auto& range : entry.snapshot->ranges) total += range.length;
+      for (const auto& range : entry.light->ranges) total += range.length;
       // The guest writes movie and UI textures without any hook and Horizon has no write
       // watch: small textures are verified every frame, big ones now and then.
-      if (total <= options_.texture_per_frame_max_bytes ||
-          front_frame_ - std::min(front_frame_, entry.checked_frame) >=
-              options_.large_texture_recheck_frames)
-        dirty = true;
-      else
-        dirty = false;
+      dirty = total <= options_.texture_per_frame_max_bytes ||
+              front_frame_ - std::min(front_frame_, entry.checked_frame) >=
+                  options_.large_texture_recheck_frames;
     }
+    std::shared_ptr<const graphics::guest::TextureCapture> bound;
     if (dirty) {
       std::string error;
       std::vector<guest::TextureRange> ranges;
@@ -287,7 +285,8 @@ void Frontend::CaptureTextures(uint8_t* base) {
         stats_.texture_failures++;
         continue;
       }
-      if (!entry.snapshot || hash != entry.content_hash) {
+      if (!entry.light || hash != entry.content_hash) {
+        std::shared_ptr<const graphics::guest::TextureCapture> snapshot;
         if (!guest::CaptureTexture(
                 fetch, cur_.command_serial,
                 [this](uint32_t address, uint32_t length) -> std::span<const uint8_t> {
@@ -295,21 +294,32 @@ void Frontend::CaptureTextures(uint8_t* base) {
                   return source ? std::span<const uint8_t>(source, length)
                                 : std::span<const uint8_t>{};
                 },
-                entry.snapshot, error)) {
+                snapshot, error)) {
           cur_.texture_errors.emplace_back(slot, std::move(error));
           stats_.texture_failures++;
           continue;
         }
         // Hash exactly the owned bytes: a loader may write between the check and the copy.
         hash = 0xcbf29ce484222325ull;
-        for (const auto& range : entry.snapshot->ranges) {
-          auto bytes = entry.snapshot->memory.Read(kPhysicalAlias + range.address, range.length);
+        for (const auto& range : snapshot->ranges) {
+          auto bytes = snapshot->memory.Read(kPhysicalAlias + range.address, range.length);
           hash = XXH3_64bits_withSeed(bytes.data(), bytes.size(), hash);
         }
         entry.content_hash = hash;
+        auto light = std::make_shared<graphics::guest::TextureCapture>();
+        light->fetch = snapshot->fetch;
+        light->version = snapshot->version;
+        light->ranges = snapshot->ranges;
+        entry.light = std::move(light);
+        entry.full = snapshot;
+        bound = std::move(snapshot);
       }
     }
-    cur_.textures[slot] = entry.snapshot;
+    if (!bound) {
+      bound = entry.full.lock();
+      if (!bound) bound = entry.light;
+    }
+    cur_.textures[slot] = std::move(bound);
   }
   // Commands keep ownership even when the cache is pruned.
   if (captured_textures_.size() > 2048) {
