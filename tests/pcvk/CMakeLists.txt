@@ -58,6 +58,27 @@ if(SR_PCVK_DXC)
     COMMAND "${SR_PCVK_DXC}" -spirv -fspv-target-env=vulkan1.1 -T ps_6_0 -E PSMain -Fo "${gpu_shader_dir}/resolve_sample.spv" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shaders/resolve_sample.hlsl"
     DEPENDS gpu/shaders/resolve_sample.hlsl VERBATIM)
   list(APPEND gpu_spv "${gpu_shader_dir}/resolve_sample.spv")
+  # End to end: the front end drives the production renderer from a synthetic guest.
+  set(e2e_dir "${CMAKE_CURRENT_BINARY_DIR}/e2e-shaders")
+  file(MAKE_DIRECTORY "${e2e_dir}")
+  set(e2e_spv "")
+  foreach(stage IN ITEMS vs ps)
+    if(stage STREQUAL "vs")
+      set(entry VSMain)
+    else()
+      set(entry PSMain)
+    endif()
+    add_custom_command(OUTPUT "${e2e_dir}/${stage}.spv"
+      COMMAND "${SR_PCVK_DXC}" -spirv -fspv-target-env=vulkan1.1 -T ${stage}_6_0 -E ${entry} -Fo "${e2e_dir}/${stage}.spv" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shaders/e2e.hlsl"
+      DEPENDS gpu/shaders/e2e.hlsl VERBATIM)
+    list(APPEND e2e_spv "${e2e_dir}/${stage}.spv")
+  endforeach()
+  add_executable(sr_pcvk_e2e gpu/e2e_fixture.cpp native/texture_stubs.cpp ${e2e_spv})
+  target_link_libraries(sr_pcvk_e2e PRIVATE sr_pcvk_vulkan sr_pcvk_frontend Threads::Threads)
+  target_include_directories(sr_pcvk_e2e PRIVATE native "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src" "${SR_PCVK_DIR}/graphics/vulkan")
+  target_compile_definitions(sr_pcvk_e2e PRIVATE SR_E2E_SHADER_DIR="${e2e_dir}")
+  add_test(NAME e2e_frontend_to_vulkan COMMAND sr_pcvk_e2e)
+
   add_executable(sr_pcvk_gpu_fixtures gpu/gpu_fixtures.cpp ${gpu_spv})
   target_link_libraries(sr_pcvk_gpu_fixtures PRIVATE sr_pcvk_vulkan)
   target_compile_definitions(sr_pcvk_gpu_fixtures PRIVATE SR_TARGET_SHADER_DIR="${gpu_shader_dir}")
