@@ -29,8 +29,18 @@ set(SR_SOURCES src/main.cpp src/sr_settings.cpp src/xma_fixes.cpp src/skip_intro
     src/sr_shader_library.cpp src/sr_shader_registry.cpp src/sr_shader_hooks.cpp
     src/sr_native_ring.cpp src/sr_native_shader_safety.cpp src/sr_native_present.cpp
     src/sr_native_system.cpp src/sr_native_guest.cpp src/sr_native_capture.cpp
-    src/sr_native_mirror.cpp src/sr_native_bridge.cpp src/sr_native_hooks.cpp
-    src/sr_native_command_ledger.cpp src/sr_native_queue.cpp)
+    src/sr_native_mirror.cpp src/sr_native_bridge.cpp
+    src/sr_native_command_ledger.cpp src/sr_native_queue.cpp
+    src/sr_vk_runtime.cpp src/sr_vk_guest_access.cpp src/sr_vk_present.cpp)
+# The D3D hooks are compiled once: both generations hook the same game functions.
+#   default  sr_vk_hooks.cpp      hooks for the PC project's Vulkan renderer (pcvk)
+#   legacy   sr_native_hooks.cpp  milestone-1 capture-only hooks (sr_native_capture)
+option(SR_NATIVE_LEGACY_CAPTURE "Build the milestone-1 capture hooks instead of the Vulkan renderer hooks" OFF)
+if(SR_NATIVE_LEGACY_CAPTURE)
+    list(APPEND SR_SOURCES src/sr_native_hooks.cpp)
+else()
+    list(APPEND SR_SOURCES src/sr_vk_hooks.cpp)
+endif()
 set(SR_BUILD_REVISION "$ENV{SR_BUILD_REVISION}")
 if(NOT SR_BUILD_REVISION)
     execute_process(COMMAND git rev-parse --short=12 HEAD
@@ -48,6 +58,19 @@ else()
     add_executable(superman_returns ${SR_SOURCES})
 endif()
 rexglue_setup_target(superman_returns GPU_PLUGINS xenos)
+
+# Native Vulkan renderer imported from superman_returns_recomp (docs/pcvk-import.md).
+set(SR_PCVK_VULKAN_INCLUDE "${REXSDK_DIR}/thirdparty/vulkan-headers/include" CACHE PATH
+    "Vulkan headers for the imported renderer")
+add_subdirectory(src/pcvk pcvk)
+target_include_directories(sr_pcvk_frontend PRIVATE "${REXSDK_DIR}/thirdparty/xxHash")
+target_link_libraries(sr_pcvk_texture PUBLIC rex::runtime)
+foreach(lib sr_pcvk_guest sr_pcvk_frontend sr_pcvk_texture sr_pcvk_vulkan)
+    rexglue_apply_target_settings(${lib})
+endforeach()
+# sr_pcvk_texture is EXCLUDE_FROM_ALL in the subdirectory (host tests do not have the SDK);
+# linking it here pulls it into this build.
+target_link_libraries(superman_returns PRIVATE sr_pcvk_frontend sr_pcvk_texture sr_pcvk_vulkan)
 
 if(REXGLUE_PLATFORM_SWITCH)
     option(SR_LTO "Enable LTO for the application and recompiled game" OFF)

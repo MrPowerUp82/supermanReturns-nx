@@ -645,7 +645,60 @@ static void RefreshCounterTests() {
   RecordRefresh(false, counters);
   assert(counters.refresh_completed == 1 && counters.swap_requests == 0);
 }
+static void InstantGpuTests() {
+  using namespace rex::graphics;
+  using namespace rex::graphics::xenos;
+  Fixture f;
+  auto services = f.services();
+  services.instant_gpu = true;
+  services.finish_native_work = {};  // Nothing in this mode may wait for native work.
+  uint32_t frames = 5;
+  services.frame_counter = [&] { return frames; };
+  RingExecutor executor(services);
+  // Fences complete at once: the swap-flag variant writes the frame counter, the other the value.
+  assert(Run(executor, Packet(PM4_EVENT_WRITE_SHD, {0x80000016, 0x402, 0xdead})) == PacketResult::kConsumed);
+  assert(f.memory[0x402] == 5);
+  assert(Run(executor, Packet(PM4_EVENT_WRITE_SHD, {0x16, 0x406, 0xbeef})) == PacketResult::kConsumed);
+  assert(f.memory[0x406] == 0xbeef);
+  assert(Run(executor, Packet(PM4_WAIT_FOR_IDLE, {0})) == PacketResult::kConsumed);
+  // A swap is counted and handed to the adapter; it never blocks on a clear.
+  assert(Run(executor, Packet(PM4_XE_SWAP, {kSwapSignature, 0x1000, 1280, 720})) == PacketResult::kConsumed);
+  assert(f.presents == 1 && executor.counters().swap_requests == 1 && executor.counters().refresh_completed == 0);
+  // Draws are consumed without the shader proof or the EDRAM mode checks.
+  assert(Run(executor, Packet(PM4_DRAW_INDX_2, {0x00010000u | 4u, 3})) == PacketResult::kConsumed);
+  assert(executor.counters().draws_omitted == 1 && executor.counters().draws_shader_blocked == 0);
+  // Screen extents: six big-endian u16 (0, 1024) (0, 1024) (0, 1), written as three k8in32 dwords.
+  assert(Run(executor, Packet(PM4_EVENT_WRITE_EXT, {0x16, 0x1000})) == PacketResult::kConsumed);
+  assert(f.memory[0x1002] == 0x400 && f.memory[0x1006] == 0x400 && f.memory[0x100a] == 1);
+  // Occlusion queries: the end marker becomes a non-zero pass count, everything else is cleared.
+  f.regs[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR] = 0x2000;
+  f.memory[0x2002] = 0xFFFFFEED;
+  f.memory[0x2006] = 0x12345678;
+  assert(Run(executor, Packet(PM4_EVENT_WRITE_ZPD, {0x16})) == PacketResult::kConsumed);
+  assert(f.memory[0x2002] == 1000 && f.memory[0x2006] == 0 && f.memory[0x2002 + 24] == 1000);
+  assert(Run(executor, Packet(PM4_VIZ_QUERY, {0x100 | 3})) == PacketResult::kConsumed);
+  assert(f.regs[XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_0] == (1u << 3));
+  // No GPU cache: a coherency wait is satisfied by clearing the dirty flag.
+  f.regs[XE_GPU_REG_COHER_STATUS_HOST] = 0x81000000;
+  assert(Run(executor, Packet(PM4_WAIT_REG_MEM, {3, XE_GPU_REG_COHER_STATUS_HOST, 0, 0xFFFFFFFFu, 0x20})) ==
+         PacketResult::kConsumed);
+  assert(f.regs[XE_GPU_REG_COHER_STATUS_HOST] == 0);
+  // Unknown opcodes and constant windows outside the known banks are skipped, not fatal.
+  assert(Run(executor, Packet(0x7e, {0})) == PacketResult::kConsumed);
+  assert(Run(executor, Packet(PM4_SET_CONSTANT, {0x00ff0000u, 1})) == PacketResult::kConsumed);
+  // The strict mode keeps refusing every one of these.
+  Fixture strict;
+  auto strict_services = strict.services();
+  strict_services.finish_native_work = {};
+  // A blocked packet suspends its executor, so each refusal gets a fresh one.
+  for (const auto& packet : {Packet(PM4_EVENT_WRITE_SHD, {0x16, 0x406, 1}), Packet(PM4_EVENT_WRITE_EXT, {0x16, 0x1000}),
+                             Packet(PM4_VIZ_QUERY, {0x103}), Packet(0x7e, {0})}) {
+    RingExecutor refusing(strict_services);
+    assert(Run(refusing, packet) == PacketResult::kBlocked);
+  }
+}
 int main() {
+  InstantGpuTests();
   RefreshCounterTests();
   ParserTests(); WaitTests(); EffectTests(); BlockedAndMalformedTests(); PredicateTests(); IndirectTests();
   ShaderSafetyTests(); ReplayTests(); ReadOnlyAndCapacityTests();

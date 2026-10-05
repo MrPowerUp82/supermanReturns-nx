@@ -39,6 +39,24 @@
 
 namespace superman_returns::native {
 
+// A joinable thread with an explicit stack size. The decoder keeps tens of kilobytes of packet
+// state on the stack and the driver's shader compiler (NAK on the Switch) recurses deeply, while
+// the default pthread stack of Horizon is only 128 KB.
+class WorkerThread {
+ public:
+  WorkerThread(std::function<void()> body, size_t stack_bytes);
+  ~WorkerThread();
+  WorkerThread(const WorkerThread&) = delete;
+  WorkerThread& operator=(const WorkerThread&) = delete;
+  bool started() const { return started_; }
+  void Join();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  bool started_ = false;
+};
+
 // Validated read access to guest memory. A null result means the range is not committed
 // readable memory; the pointer stays valid at least until the caller copies from it.
 class GuestAccess {
@@ -206,7 +224,7 @@ class Frontend {
   bool started_ = false;
   std::atomic<bool> stop_{false};
   bool sink_failed_ = false;
-  std::thread worker_;
+  std::unique_ptr<WorkerThread> worker_;
   std::mutex queue_mutex_;
   std::condition_variable queue_cv_, done_cv_;
   std::deque<std::unique_ptr<WorkBatch>> work_queue_;

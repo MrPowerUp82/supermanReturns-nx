@@ -1,12 +1,15 @@
 // Guest-thread front end (pcvk/native_renderer/frontend.*): a synthetic guest memory image
 // stands in for the console, the sink collects the decoded packets.
+#include <atomic>
 #include <bit>
 #include <cstring>
 #include <mutex>
 
 #include "pcvk/graphics/guest/render_packet.h"
 #include "pcvk/native_renderer/frontend.h"
+#include "pcvk/graphics/shaders/container_key.h"
 #include "pcvk/native_renderer/game_profile.h"
+#include "pcvk/native_renderer/shader_objects.h"
 #include "test_main.h"
 
 namespace {
@@ -219,3 +222,60 @@ SR_TEST(frontend_stop_is_idempotent_and_ignores_later_calls) {
 }
 
 }  // namespace
+
+namespace {
+using superman_returns::native::CaptureShaderContainer;
+using superman_returns::native::ShaderObjects;
+std::vector<uint8_t> FabricatedContainer(bool vertex, bool instanced = false) {
+  std::vector<uint8_t> v(96);
+  auto put = [&](size_t at, uint32_t x) { for (int i = 0; i < 4; ++i) v[at + i] = uint8_t(x >> (24 - 8 * i)); };
+  put(0, 0x102a1100 | uint32_t(vertex));
+  put(4, 72);
+  put(8, 24);
+  if (instanced) std::memcpy(v.data() + 40, "instance_data", 14);
+  return v;
+}
+}  // namespace
+
+SR_TEST(shader_objects_capture_exact_container_and_replace_reused_addresses) {
+  FakeGuest g;
+  auto vs = FabricatedContainer(true, true), ps = FabricatedContainer(false);
+  std::memcpy(g.mem.data() + 0x2000, vs.data(), vs.size());
+  std::memcpy(g.mem.data() + 0x3000, ps.data(), ps.size());
+  auto a = CaptureShaderContainer(g, 0x2000, true);
+  SR_CHECK(a != nullptr);
+  if (a) {
+    SR_CHECK(a->vertex && a->dynamic_vertex_fetch);
+    SR_CHECK_EQ(a->container.size(), size_t(96));
+    SR_CHECK(a->container == vs);
+    SR_CHECK_EQ(a->hash, superman_returns::graphics::shaders::ContainerKey(vs));
+  }
+  SR_CHECK(CaptureShaderContainer(g, 0x2000, false) == nullptr);  // stage must agree with the creator
+  SR_CHECK(CaptureShaderContainer(g, 0x5000, true) == nullptr);   // not a container
+  SR_CHECK(CaptureShaderContainer(g, 0xFFFFFFFFu, true) == nullptr);
+  auto b = CaptureShaderContainer(g, 0x3000, false);
+  SR_CHECK(b && !b->vertex && !b->dynamic_vertex_fetch);
+  ShaderObjects objects;
+  objects.Remember(0x700, a);
+  SR_CHECK(objects.Find(0x700) == a);
+  objects.Remember(0x700, b);  // the XDK reused the address for another shader
+  SR_CHECK(objects.Find(0x700) == b);
+  objects.Remember(0x700, nullptr);
+  SR_CHECK(objects.Find(0x700) == nullptr);
+  SR_CHECK(objects.Find(0) == nullptr);
+}
+
+SR_TEST(frontend_worker_runs_on_a_large_stack) {
+  // The decoder and the driver need far more than the 128 KB Horizon gives a default thread.
+  std::atomic<bool> ok{false};
+  superman_returns::native::WorkerThread thread(
+      [&] {
+        volatile char big[1 << 20];
+        for (size_t i = 0; i < sizeof(big); i += 4096) big[i] = char(i);
+        ok = big[4096] == char(4096);
+      },
+      8u << 20);
+  SR_CHECK(thread.started());
+  thread.Join();
+  SR_CHECK(ok.load());
+}

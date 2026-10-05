@@ -240,7 +240,7 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
     case PM4_NOP: case PM4_ME_INIT: case PM4_INVALIDATE_STATE:
       return kConsumed;
     case PM4_CONTEXT_UPDATE:
-      return p[0] == 0 ? kConsumed : kBlocked;
+      return (p[0] == 0 || services_.instant_gpu) ? kConsumed : kBlocked;
     case PM4_INTERRUPT:
       for (; executing_->effect < 6; ++executing_->effect) {
         const uint32_t cpu = uint32_t(executing_->effect);
@@ -252,6 +252,12 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       return kConsumed;
     case PM4_XE_SWAP:
       if (p.size() < 4 || p[0] != kSwapSignature) return kInvalid;
+      if (services_.instant_gpu) {
+        // Counted once; presentation belongs to the renderer, driven by the hooked swap.
+        if (!executing_->prepared) { ++counters_.swap_requests; executing_->prepared = true; }
+        if (services_.present && !services_.present(p[1], p[2], p[3])) return kBlocked;
+        return kConsumed;
+      }
       if(services_.native_packet) {
         const auto accepted=services_.native_packet(executing_->stamp,true);
         if(accepted==kConsumed) ++counters_.native_work_accepted;
@@ -299,7 +305,11 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
           if (services_.report_wait) services_.report_wait(p[0],p[1],p[2],p[3]);
           return kBlocked;
         }
-        if (!(p[0]&0x10) && p[1]==XE_GPU_REG_COHER_STATUS_HOST && (value&0x80000000u)) {
+        if (services_.instant_gpu && !(p[0]&0x10) && p[1]==XE_GPU_REG_COHER_STATUS_HOST) {
+          // There is no GPU cache: memory is always coherent.
+          if (!Write(false, p[1], 0)) return kBlocked;
+          value = 0;
+        } else if (!(p[0]&0x10) && p[1]==XE_GPU_REG_COHER_STATUS_HOST && (value&0x80000000u)) {
           uint32_t base=0,size=0;
           if (value!=0x81000000 || counters_.draws_omitted || !services_.startup_vertex_coherence ||
               !Read(false,XE_GPU_REG_COHER_BASE_HOST,base) || !Read(false,XE_GPU_REG_COHER_SIZE_HOST,size) ||
@@ -354,6 +364,10 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
     case PM4_EVENT_WRITE_SHD:
       if (p.size() < 3 || !MemoryExtent(p[1], 1)) return kInvalid;
       if (!executing_->prepared) {
+        if (services_.instant_gpu) {
+          executing_->values={(p[0]&0x80000000u) ? (services_.frame_counter ? services_.frame_counter() : uint32_t(counters_.swap_requests)) : p[2]};
+          executing_->prepared=true;
+        } else {
         if (!services_.finish_native_work) return kBlocked;
         const auto finished=services_.finish_native_work();
         if(finished!=kConsumed) return finished;
@@ -361,21 +375,73 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
         // Only completed presenter swaps contribute here; retries keep this value.
         executing_->values={p[0]&0x80000000u?uint32_t(counters_.refresh_completed):p[2]};
         executing_->prepared=true;
+        }
       }
       if (!executing_->effect) {
         if (!Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, p[0] & 0x3f)) return kBlocked;
         ++executing_->effect;
       }
       return Write(true, p[1], executing_->values[0]) ? kConsumed : kBlocked;
-    case PM4_EVENT_WRITE_EXT:
-      return p.size() < 2 ? kInvalid : kBlocked;
+    case PM4_EVENT_WRITE_EXT: {
+      if (p.size() < 2) return kInvalid;
+      if (!services_.instant_gpu) return kBlocked;
+      // Screen extents of the previous draws: the full range, as on the PC (big-endian u16 x 6).
+      const uint32_t address = (p[1] & ~3u) | uint32_t(Endian::k8in32);
+      if (!MemoryExtent(p[1] & ~3u, 3)) return kInvalid;
+      constexpr uint16_t extent = uint16_t(xenos::kTexture2DCubeMaxWidthHeight >> 3);
+      if (!executing_->prepared) {
+        // Six big-endian u16: (0, extent), (0, extent), (0, 1).
+        executing_->values = {uint32_t(extent), uint32_t(extent), 1u};
+        executing_->prepared = true;
+      }
+      if (!executing_->child_started) {
+        if (!Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, p[0] & 0x3f)) return kBlocked;
+        executing_->child_started = true;
+      }
+      return WriteValues(true, address, 4, executing_->values);
+    }
     case PM4_WAIT_FOR_IDLE:
+      if (services_.instant_gpu) return kConsumed;
       return services_.finish_native_work?services_.finish_native_work():kBlocked;
-    case PM4_EVENT_WRITE_ZPD: case PM4_VIZ_QUERY:
-      return kBlocked;
+    case PM4_EVENT_WRITE_ZPD: {
+      if (!services_.instant_gpu) return kBlocked;
+      // Occlusion queries report a fixed sample count: the begin marker is cleared and the end
+      // marker becomes a non-zero pass count.
+      if (!Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, p[0] & 0x3f)) return kBlocked;
+      uint32_t counts = 0;
+      if (!Read(false, XE_GPU_REG_RB_SAMPLE_COUNT_ADDR, counts)) return kBlocked;
+      if (!counts) return kConsumed;
+      const uint32_t address = (counts & ~3u) | uint32_t(Endian::k8in32);
+      if (!MemoryExtent(counts & ~3u, 8)) return kConsumed;
+      constexpr uint32_t kFinished = 0xFFFFFEED;
+      bool end = false;
+      uint32_t words[8] = {};
+      for (uint32_t i = 0; i < 8; ++i) {
+        if (!Read(true, address + i * 4, words[i])) return kBlocked;
+        if (i < 4 && words[i] == kFinished) end = true;
+      }
+      for (uint32_t i = 0; i < 8; ++i) {
+        const uint32_t value = (end && (i == 0 || i == 6)) ? 1000u : 0u;
+        if (!Write(true, address + i * 4, value)) return kBlocked;
+      }
+      return kConsumed;
+    }
+    case PM4_VIZ_QUERY: {
+      if (!services_.instant_gpu) return kBlocked;
+      const uint32_t id = p[0] & 0x3f;
+      if (!(p[0] & 0x100)) {
+        if (!Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, VIZQUERY_START)) return kBlocked;
+        return kConsumed;
+      }
+      if (!Write(false, XE_GPU_REG_VGT_EVENT_INITIATOR, VIZQUERY_END)) return kBlocked;
+      const uint32_t reg = id < 32 ? XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_0 : XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_1;
+      uint32_t status = 0;
+      if (!Read(false, reg, status) || !Write(false, reg, status | (1u << (id & 31)))) return kBlocked;
+      return kConsumed;
+    }
     case PM4_SET_CONSTANT: case PM4_SET_CONSTANT2: case PM4_SET_SHADER_CONSTANTS: {
       const uint32_t base = op == PM4_SET_CONSTANT ? ConstantBase(p[0]) : 0;
-      if (base == UINT32_MAX) return kInvalid;
+      if (base == UINT32_MAX) return services_.instant_gpu ? kConsumed : kInvalid;
       const uint32_t index = base + (p[0] & (op == PM4_SET_CONSTANT ? 0x7ff : 0xffff));
       return WriteValues(false, index, 1, std::span(p).subspan(1));
     }
@@ -424,6 +490,11 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       return kConsumed;
     }
     case PM4_DRAW_INDX: case PM4_DRAW_INDX_2: {
+      if (services_.instant_gpu) {
+        // The Vulkan renderer already replayed this draw from the hooked D3D call.
+        ++counters_.draws_omitted;
+        return kConsumed;
+      }
       const size_t start = op == PM4_DRAW_INDX ? 1 : 0;
       if (p.size() <= start) return kInvalid;
       const uint32_t source = (p[start] >> 6) & 3;
@@ -465,7 +536,7 @@ PacketResult RingExecutor::Execute(const PacketView& packet, uint32_t depth) {
       if(!services_.native_packet) ++counters_.draws_omitted;
       return kConsumed;
     }
-    default: return kBlocked;
+    default: return services_.instant_gpu ? kConsumed : kBlocked;
   }
 }
 }  // namespace sr::native

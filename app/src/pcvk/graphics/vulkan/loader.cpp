@@ -3,7 +3,7 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
-#else
+#elif !defined(__SWITCH__)
 #include <dlfcn.h>
 #endif
 namespace superman_returns::graphics::vulkan {
@@ -17,7 +17,7 @@ Loader::~Loader() {
   if (module_) {
 #ifdef _WIN32
     FreeLibrary(static_cast<HMODULE>(module_));
-#else
+#elif !defined(__SWITCH__)
     dlclose(module_);
 #endif
   }
@@ -25,7 +25,14 @@ Loader::~Loader() {
 bool Loader::Open(Error &e, std::string path) {
   if (module_)
     return true;
-#ifdef _WIN32
+#if defined(__SWITCH__)
+  // Horizon has no dynamic loader: the device belongs to the ReXGlue SDK and is adopted with
+  // Context::Adopt, which resolves every entry point through the SDK's own loader.
+  (void)path;
+  e = {"Vulkan loader", VK_ERROR_INITIALIZATION_FAILED,
+       "No dynamic Vulkan loader on this platform; adopt the SDK device (Context::Adopt)"};
+  return false;
+#elif defined(_WIN32)
   if (path.empty())
     path = "vulkan-1.dll";
   module_ = LoadLibraryExA(path.c_str(), nullptr,

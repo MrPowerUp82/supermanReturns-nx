@@ -19,6 +19,7 @@
 // `key` is FNV-1a 64 of the original container bytes (header + virtual + physical parts).
 #pragma once
 #include "binding_contract.h"
+#include "container_key.h"
 #include "../guest/shader_capture.h"
 #include "vulkan_shader_service.h"
 #include <cstdint>
@@ -33,8 +34,6 @@
 namespace superman_returns::graphics::shaders {
 inline constexpr char kShaderPackMagic[8] = {'S', 'R', 'V', 'K', 'P', 'K', '0', '1'};
 inline constexpr uint32_t kShaderPackVersion = 1;
-uint64_t ContainerKey(std::span<const uint8_t> container);
-uint64_t Fnv1a64(std::span<const uint8_t> bytes, uint64_t seed = 14695981039346656037ull);
 struct PackInput {
   uint64_t key = 0;
   uint32_t container_size = 0;

@@ -68,3 +68,36 @@ if(SR_PCVK_DXC)
     add_test(NAME ${name} COMMAND sr_pcvk_gpu_fixtures ${mode})
   endforeach()
 endif()
+
+# ABI contract: HLSL written against the patched emitter's shader_common.h (sr-vulkan-buffers-v1)
+# is compiled with DXC and drawn through the production descriptor layouts. Needs the patched
+# XenosRecomp tree (python tools/vkshaders/fetch_xenosrecomp.py).
+set(SR_PCVK_SHADER_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../../.tools/xenosrecomp/src/XenosRecomp/shader_common.h"
+    CACHE FILEPATH "Patched shader_common.h")
+if(SR_PCVK_DXC AND EXISTS "${SR_PCVK_SHADER_COMMON}")
+  get_filename_component(contract_include "${SR_PCVK_SHADER_COMMON}" DIRECTORY)
+  set(contract_dir "${CMAKE_CURRENT_BINARY_DIR}/contract-shaders")
+  file(MAKE_DIRECTORY "${contract_dir}")
+  set(contract_spv "")
+  foreach(stage IN ITEMS vs ps)
+    if(stage STREQUAL "vs")
+      set(entry VSMain)
+      set(yflag -fvk-invert-y)
+    else()
+      set(entry PSMain)
+      set(yflag "")
+    endif()
+    add_custom_command(OUTPUT "${contract_dir}/${stage}.spv"
+      COMMAND "${SR_PCVK_DXC}" -spirv -fspv-target-env=vulkan1.1 -D SR_VULKAN_BUFFERS=1 -HV 2021 -T ${stage}_6_0 -E ${entry} ${yflag}
+              -I "${contract_include}" -I "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shaders" -Fo "${contract_dir}/${stage}.spv"
+              "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shaders/guest_contract.hlsl"
+      DEPENDS gpu/shaders/guest_contract.hlsl gpu/shaders/contract.hlsl "${SR_PCVK_SHADER_COMMON}" VERBATIM)
+    list(APPEND contract_spv "${contract_dir}/${stage}.spv")
+  endforeach()
+  add_executable(sr_pcvk_contract_test gpu/contract_fixture.cpp ${contract_spv})
+  target_link_libraries(sr_pcvk_contract_test PRIVATE sr_pcvk_vulkan)
+  target_include_directories(sr_pcvk_contract_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src" "${SR_PCVK_DIR}/graphics/vulkan")
+  target_compile_definitions(sr_pcvk_contract_test PRIVATE SR_CONTRACT_SHADER_DIR="${contract_dir}")
+  add_test(NAME contract_test COMMAND sr_pcvk_contract_test)
+  add_test(NAME contract_test_production COMMAND sr_pcvk_contract_test --production-bindings)
+endif()

@@ -9,6 +9,7 @@
 #include "sr_native_system.h"
 #include "sr_settings.h"
 #include "sr_shader_registry.h"
+#include "sr_vk_runtime.h"
 // Source revision of this build (CMake: SR_BUILD_REVISION env var or git). It identifies the
 // source, not the NRO bytes: an artifact hash cannot be embedded in the artifact itself.
 #ifndef SR_BUILD_REVISION
@@ -66,11 +67,12 @@ class SupermanReturnsApp : public rex::ReXApp {
   // fatal) instead of silently running Xenos.
   void OnPreSetup(rex::RuntimeConfig& config) override {
     const std::string mode = rex::cvar::GetFlagByName("sr_renderer");
-    REXLOG_INFO("[sr-native] sr_renderer={} milestone=1 build={}", mode, SR_BUILD_REVISION);
+    const bool vulkan = REXCVAR_GET(sr_vk);
+    REXLOG_INFO("[sr-native] sr_renderer={} vulkan_renderer={} build={}", mode, vulkan, SR_BUILD_REVISION);
     if (mode == "xenos") return;
     const bool valid = mode == "native";
     if (!valid) REXLOG_ERROR("Invalid sr_renderer: {}", mode);
-    config.graphics = sr::native::CreateGraphicsSystem(valid);
+    config.graphics = sr::native::CreateGraphicsSystem(valid, valid && vulkan);
   }
 
   // The SDK hard-exits after TerminateTitle without running destructors, so the native
@@ -112,8 +114,11 @@ class SupermanReturnsApp : public rex::ReXApp {
                 rex::cvar::GetFlagByName("sr_renderer"));
     // Drawing with the offline shader pack needs the device features its SPIR-V
     // declares (64-bit integers, buffer addresses, descriptor arrays); they are
-    // chosen when the Vulkan device is created, after this point.
-    if (rex::cvar::GetFlagByName("pack_shaders") == "draw")
+    // chosen when the Vulkan device is created, after this point. The native Vulkan
+    // renderer needs the dynamic descriptor indexing and mirror-clamp features of the
+    // same group (sr-vulkan-buffers-v1).
+    if (rex::cvar::GetFlagByName("pack_shaders") == "draw" ||
+        (rex::cvar::GetFlagByName("sr_renderer") == "native" && REXCVAR_GET(sr_vk)))
       SetDefault("vulkan_native_shader_features", "true");
     sr::native::InitializeRuntimeShaders();
   }

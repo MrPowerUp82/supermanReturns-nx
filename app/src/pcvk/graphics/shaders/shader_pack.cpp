@@ -9,10 +9,6 @@ uint64_t Rd64(const uint8_t* p) {uint64_t v;std::memcpy(&v,p,8);return v;}
 void Wr32(std::vector<uint8_t>& out,size_t at,uint32_t v) {std::memcpy(out.data()+at,&v,4);}
 void Wr64(std::vector<uint8_t>& out,size_t at,uint64_t v) {std::memcpy(out.data()+at,&v,8);}
 }
-uint64_t Fnv1a64(std::span<const uint8_t> bytes,uint64_t seed) {
-  uint64_t h=seed;for(auto b:bytes) {h^=b;h*=1099511628211ull;}return h;
-}
-uint64_t ContainerKey(std::span<const uint8_t> container) {return Fnv1a64(container);}
 std::vector<uint8_t> BuildShaderPack(std::vector<PackInput> inputs) {
   std::sort(inputs.begin(),inputs.end(),[](const PackInput& a,const PackInput& b){return a.key!=b.key?a.key<b.key:a.stage<b.stage;});
   size_t total=kHeader+inputs.size()*kEntry;

@@ -113,7 +113,10 @@ inline uint64_t NativeProgress() { return NativeProgressCounter().load(std::memo
 inline void RecordNativeProgress() { NativeProgressCounter().fetch_add(1, std::memory_order_acq_rel); }
 
 // With configuration_valid=false the system's setup fails before any resource is made.
-std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem(bool configuration_valid = true);
+// vulkan_renderer selects the PC project's Vulkan renderer (D3D hooks + pcvk) over the
+// milestone-1 black-clear presentation.
+std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem(bool configuration_valid = true,
+                                                                   bool vulkan_renderer = false);
 
 // Worker-only shutdown for the app's close path, which hard-exits after the SDK terminates the
 // title: stops callbacks, cancels waits and joins the ring and vblank workers. The presenter and

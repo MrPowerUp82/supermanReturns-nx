@@ -13,6 +13,12 @@
 #endif
 #include <xxhash.h>
 
+#if defined(_WIN32)
+#include <thread>
+#else
+#include <pthread.h>
+#endif
+
 #include "../graphics/guest/draw_state.h"
 #include "../graphics/guest/pm4_capture.h"
 #include "../graphics/guest/texture_layout.h"
@@ -65,6 +71,48 @@ inline uint32_t GuestPhysical(uint32_t address) {
 
 }  // namespace
 
+struct WorkerThread::Impl {
+  std::function<void()> body;
+#if defined(_WIN32)
+  std::thread thread;
+#else
+  pthread_t thread{};
+#endif
+};
+
+WorkerThread::WorkerThread(std::function<void()> body, size_t stack_bytes) : impl_(new Impl) {
+  impl_->body = std::move(body);
+#if defined(_WIN32)
+  (void)stack_bytes;  // the default 1 MB is enough on Windows
+  impl_->thread = std::thread([impl = impl_.get()] { impl->body(); });
+  started_ = true;
+#else
+  pthread_attr_t attributes;
+  if (pthread_attr_init(&attributes) != 0) return;
+  pthread_attr_setstacksize(&attributes, stack_bytes);
+  started_ = pthread_create(
+                 &impl_->thread, &attributes,
+                 [](void* argument) -> void* {
+                   static_cast<Impl*>(argument)->body();
+                   return nullptr;
+                 },
+                 impl_.get()) == 0;
+  pthread_attr_destroy(&attributes);
+#endif
+}
+
+void WorkerThread::Join() {
+  if (!started_) return;
+  started_ = false;
+#if defined(_WIN32)
+  if (impl_->thread.joinable()) impl_->thread.join();
+#else
+  pthread_join(impl_->thread, nullptr);
+#endif
+}
+
+WorkerThread::~WorkerThread() { Join(); }
+
 Frontend::Frontend(GuestAccess& access, FrontendOptions options)
     : access_(access), options_(options) {}
 
@@ -88,8 +136,12 @@ bool Frontend::Start(PacketSink sink, std::function<void()> cancel) {
   if (started_ || stop_.load() || !sink) return false;
   sink_ = std::move(sink);
   cancel_sink_ = std::move(cancel);
+  worker_ = std::make_unique<WorkerThread>([this] { WorkerMain(); }, 8u << 20);
+  if (!worker_->started()) {
+    worker_.reset();
+    return false;
+  }
   started_ = true;
-  worker_ = std::thread(&Frontend::WorkerMain, this);
   return true;
 }
 
@@ -98,7 +150,7 @@ void Frontend::Stop() {
   if (!stop_.exchange(true) && cancel_sink_) cancel_sink_();
   queue_cv_.notify_all();
   done_cv_.notify_all();
-  if (worker_.joinable()) worker_.join();
+  if (worker_) worker_->Join();
 }
 
 void Frontend::NoteGuestDevice(uint32_t device) {

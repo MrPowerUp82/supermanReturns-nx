@@ -25,7 +25,7 @@ target_link_libraries(sr_pcvk_texture PUBLIC sr_pcvk_guest)
 
 # Guest-thread capture (hooked D3D call -> WorkBatch -> RenderPacket worker). SDK-free except
 # for the texture decoder it calls, which the final link (or a host test stub) provides.
-add_library(sr_pcvk_frontend STATIC native_renderer/frontend.cpp)
+add_library(sr_pcvk_frontend STATIC native_renderer/frontend.cpp native_renderer/shader_objects.cpp)
 target_link_libraries(sr_pcvk_frontend PUBLIC sr_pcvk_guest)
 
 add_library(sr_pcvk_vulkan STATIC
