@@ -118,5 +118,17 @@
     "xex_version": "0.0.0.1",
     "sha256": "c8f243acd99de9a91f5ae4f409721c0e954e3d5eb96861419d3da07b8106db2b",
     "distributed": false
+  },
+  "superman_returns_recomp_vulkan_renderer": {
+    "url": "https://github.com/MrPowerUp82/superman_returns_recomp",
+    "commit": "f5ac13b3aa6623cc022c59624c978cd2b5280bbf",
+    "imported_to": "app/src/pcvk",
+    "files": ["port/src/graphics/guest/*", "port/src/graphics/vulkan/{context,loader,policy,device_requirements,descriptors,descriptor_sets,resources,image_state,render_targets,game_pipeline,game_renderer,depth_resolve,resolve,composition,game_frame}.*", "port/src/graphics/shaders/*", "port/src/native_renderer/{pm4_mirror,game_profile,checked_guest_memory,shader_container,index_endian,xenos_tiling,shader_pack,vertex_signature,texture_binding}.*"],
+    "tools_imported_to": "tools/vkshaders",
+    "tools": ["tools/shaders/{runtime_vulkan_shader,compile_vulkan,spirv_metadata,vulkan_contract,validate_vulkan_corpus,fetch_xenosrecomp,srpaths}.py", "tools/shaders/xenosrecomp/{CMakeLists.txt,corpus_main.cpp,pch_corpus.h,patches/*}"],
+    "xenosrecomp_upstream": {"url": "https://github.com/zolaware/reblue-XenosRecomp", "commit": "339af41df2c23dbe3256c1c377716b81a0e0fe6b", "patches": "tools/vkshaders/xenosrecomp/patches (0001-0013)"},
+    "local_changes": ["Context::OpenOffscreenDevice/Adopt", "optional presentation entry points", "QueueLock", "ShaderPoll::unavailable and skip_failed_draws", "committed helper SPIR-V (graphics/vulkan/generated)", "frontend.* and shader_objects.* (new, cut from native_renderer.cpp)", "shader_pack.* and tools/vkshaders/build_pack.py (new)"],
+    "host_validation": "tests/test_pcvk.sh on Linux with Mesa lavapipe 25.2.8 (Vulkan 1.4) and DXC 1.8.2505.1; no console run",
+    "contains_game_data": false
   }
 }

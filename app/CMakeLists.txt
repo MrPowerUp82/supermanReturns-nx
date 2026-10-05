@@ -64,13 +64,14 @@ set(SR_PCVK_VULKAN_INCLUDE "${REXSDK_DIR}/thirdparty/vulkan-headers/include" CAC
     "Vulkan headers for the imported renderer")
 add_subdirectory(src/pcvk pcvk)
 target_include_directories(sr_pcvk_frontend PRIVATE "${REXSDK_DIR}/thirdparty/xxHash")
-target_link_libraries(sr_pcvk_texture PUBLIC rex::runtime)
-foreach(lib sr_pcvk_guest sr_pcvk_frontend sr_pcvk_texture sr_pcvk_vulkan)
+# The Xenos texture decoder uses the SDK's texture formats; it joins the guest library here
+# (texture_capture.cpp in the same library calls it, so it cannot live in a later archive).
+target_sources(sr_pcvk_guest PRIVATE src/pcvk/graphics/guest/texture_layout.cpp)
+target_link_libraries(sr_pcvk_guest PUBLIC rex::runtime)
+foreach(lib sr_pcvk_guest sr_pcvk_frontend sr_pcvk_vulkan)
     rexglue_apply_target_settings(${lib})
 endforeach()
-# sr_pcvk_texture is EXCLUDE_FROM_ALL in the subdirectory (host tests do not have the SDK);
-# linking it here pulls it into this build.
-target_link_libraries(superman_returns PRIVATE sr_pcvk_frontend sr_pcvk_texture sr_pcvk_vulkan)
+target_link_libraries(superman_returns PRIVATE sr_pcvk_frontend sr_pcvk_vulkan)
 
 if(REXGLUE_PLATFORM_SWITCH)
     option(SR_LTO "Enable LTO for the application and recompiled game" OFF)
