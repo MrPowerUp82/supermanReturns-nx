@@ -120,6 +120,8 @@ class VulkanDevice {
     // Features enabled for native shaders, if requested at initialization.
     bool shaderInt64 = false;
     bool shaderSampledImageArrayDynamicIndexing = false;
+    // The Superman Returns native renderer's vertex-fetch buffer array (sr-vulkan-buffers-v1).
+    bool shaderStorageBufferArrayDynamicIndexing = false;
     bool bufferDeviceAddress = false;
     bool runtimeDescriptorArray = false;
     bool descriptorBindingPartiallyBound = false;

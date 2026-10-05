@@ -8,6 +8,7 @@ project(sr_pcvk_tests LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 enable_testing()
+find_package(Threads REQUIRED)
 set(SR_PCVK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/pcvk")
 add_subdirectory("${SR_PCVK_DIR}" pcvk)
 
@@ -16,9 +17,10 @@ add_executable(sr_pcvk_native_tests
   native/test_guest_state.cpp native/test_render_packets.cpp native/test_render_state.cpp
   native/test_vertex_layout.cpp native/test_primitive_expansion.cpp native/test_texture.cpp
   native/test_pm4_mirror.cpp native/test_game_profile.cpp
-  native/test_index_endian.cpp native/test_shaders.cpp)
+  native/test_index_endian.cpp native/test_shaders.cpp native/test_frontend.cpp
+  native/texture_stubs.cpp)
 target_include_directories(sr_pcvk_native_tests PRIVATE native "${SR_PCVK_DIR}/native_renderer" "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src" "${CMAKE_CURRENT_SOURCE_DIR}/../../sdk/include")
-target_link_libraries(sr_pcvk_native_tests PRIVATE sr_pcvk_guest)
+target_link_libraries(sr_pcvk_native_tests PRIVATE sr_pcvk_frontend Threads::Threads)
 add_test(NAME sr_pcvk_native_tests COMMAND sr_pcvk_native_tests)
 
 add_executable(sr_pcvk_vulkan_tests

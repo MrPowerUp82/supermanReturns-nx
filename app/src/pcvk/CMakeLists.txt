@@ -23,6 +23,11 @@ target_compile_features(sr_pcvk_guest PUBLIC cxx_std_23)
 add_library(sr_pcvk_texture STATIC EXCLUDE_FROM_ALL graphics/guest/texture_capture.cpp graphics/guest/texture_layout.cpp)
 target_link_libraries(sr_pcvk_texture PUBLIC sr_pcvk_guest)
 
+# Guest-thread capture (hooked D3D call -> WorkBatch -> RenderPacket worker). SDK-free except
+# for the texture decoder it calls, which the final link (or a host test stub) provides.
+add_library(sr_pcvk_frontend STATIC native_renderer/frontend.cpp)
+target_link_libraries(sr_pcvk_frontend PUBLIC sr_pcvk_guest)
+
 add_library(sr_pcvk_vulkan STATIC
   graphics/shaders/shader_result.cpp
   graphics/vulkan/spirv.cpp graphics/vulkan/loader.cpp graphics/vulkan/policy.cpp graphics/vulkan/context.cpp

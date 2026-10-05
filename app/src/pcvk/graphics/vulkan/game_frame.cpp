@@ -3,9 +3,9 @@
 #include <cstdlib>
 #include <thread>
 namespace superman_returns::graphics::vulkan {
-GameFrame::GameFrame(Context& c,std::mutex& mutex,ShaderLookup shaders,TextureDecoder decoder):c_(c),queue_mutex_(mutex),shaders_(std::move(shaders)),renderer_(c,shaders_,std::move(decoder)) {}
+GameFrame::GameFrame(Context& c,QueueLock lock,ShaderLookup shaders,TextureDecoder decoder):c_(c),queue_mutex_(std::move(lock)),shaders_(std::move(shaders)),renderer_(c,shaders_,std::move(decoder)) {}
 GameFrame::~GameFrame() {
-  std::lock_guard lock(queue_mutex_);snapshots_.clear();
+  std::lock_guard<QueueLock> lock(queue_mutex_);snapshots_.clear();
   if(submitted_) {c_.f.vkDeviceWaitIdle(c_.device);renderer_.Retire(serial_);}
   if(fence_) c_.f.vkDestroyFence(c_.device,fence_,nullptr);
   if(pool_) c_.f.vkDestroyCommandPool(c_.device,pool_,nullptr);
@@ -26,7 +26,7 @@ bool GameFrame::WaitFence(Error& e) {
   // The queue lock isn't held across waits, so UI paints can be submitted.
   for(;;) {
     auto result=c_.f.vkWaitForFences(c_.device,1,&fence_,VK_TRUE,25000000);
-    if(result==VK_SUCCESS) {std::lock_guard lock(queue_mutex_);renderer_.Retire(serial_);submitted_=false;return true;}
+    if(result==VK_SUCCESS) {std::lock_guard<QueueLock> lock(queue_mutex_);renderer_.Retire(serial_);submitted_=false;return true;}
     if(result!=VK_TIMEOUT) return Check(result,"Game frame completion",e);
     if(cancelled_) {e={"Game frame",VK_ERROR_INITIALIZATION_FAILED,"Rendering cancelled"};return false;}
   }
@@ -104,7 +104,7 @@ bool GameFrame::Enqueue(guest::RenderPacket&& packet,std::shared_ptr<TextureReso
   const auto submit_started=std::chrono::steady_clock::now();
   std::chrono::steady_clock::time_point queue_ready;
   {
-    std::lock_guard lock(queue_mutex_);
+    std::lock_guard<QueueLock> lock(queue_mutex_);
     queue_ready=std::chrono::steady_clock::now();
     if(!Check(c_.f.vkQueueSubmit(c_.graphics_queue,1,&submit,fence_),"Submit game frame",e)) return fail();
   }
